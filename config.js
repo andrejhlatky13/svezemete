@@ -5,6 +5,6 @@
 // Nikdy sem nedávejte service_role klíč.
 window.SVEZEME_CONFIG = {
   demo: false,
-  supabaseUrl: "__SB_URL__",
-  supabaseAnonKey: "__SB_ANON_KEY__",
+  supabaseUrl: "https://mhizoumxkjxsgjmahefz.supabase.co",
+  supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oaXpvdW14a2p4c2dqbWFoZWZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwOTU2MTQsImV4cCI6MjExMDY3MTYxNH0.Ykd9MNQ1ZhE6NhupKOb5xI-uH-VT2gnLcXpDkjtDXhc",
 };
