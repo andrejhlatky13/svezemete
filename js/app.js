@@ -43,6 +43,10 @@ function configured() {
   return url.startsWith("https://") && !url.includes("__SB") && key.length > 20 && !key.includes("__SB");
 }
 
+function demoAllowed() {
+  return window.SVEZEME_CONFIG?.demo === true;
+}
+
 function pullDraft() {
   document.querySelectorAll("[data-field]").forEach((el) => {
     S.draft[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
@@ -70,6 +74,9 @@ async function refresh() {
 }
 
 function viewNow() {
+  if (!S.backend) return "unconfigured";
+  const signedIn = !!S.bundle?.me;
+  if (!signedIn) return S.view === "register" ? "register" : "login";
   if (S.customerLock && !["customer", "order", "terms", "pin"].includes(S.view)) return "pin";
   return S.view;
 }
@@ -139,6 +146,10 @@ function viewHome() {
     <button type="button" class="btn ghost" data-act="go" data-view="profile">Můj profil</button>`);
 }
 
+function viewUnconfigured() {
+  return `<main class="gate"><p>Aplikace zatím není nastavena</p></main>`;
+}
+
 function viewLogin() {
   const demo = S.backend.mode === "demo";
   const roster = demo ? S.backend.roster() : [];
@@ -153,9 +164,7 @@ function viewLogin() {
       <button class="btn" type="submit">Přihlásit</button>
     </form>
     ${roster.length ? `<h2>Účty v tomto prohlížeči</h2>${roster.map((u) => `<button type="button" class="card-btn" data-act="pick-user" data-email="${esc(u.email)}"><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span></button>`).join("")}<p class="hint">Jen demo v tomto prohlížeči. Hesla se tu nezobrazují.</p>` : ""}
-    ${demo ? `<button type="button" class="btn ghost" data-act="demo-admin">Vstoupit jako správce (demo)</button>` : `<form data-act="bootstrap-admin"><h2>První správce</h2><p class="hint">Jen dokud žádný správce není. Pak už účet založí jen on.</p><label>Jméno<input data-field="adminName"></label><label>E-mail<input type="email" data-field="adminEmail"></label><label>Heslo<input type="password" data-field="adminPassword"></label><button class="btn ghost" type="submit">Založit účet správce</button></form>`}
-    ${configured() && demo ? `<button type="button" class="btn ghost" data-act="use-remote">Přepnout na server</button>` : ""}
-    ${!demo ? `<button type="button" class="btn ghost" data-act="use-demo">Vyzkoušet demo bez serveru</button>` : ""}`);
+    ${demo ? `<button type="button" class="btn ghost" data-act="demo-admin">Vstoupit jako správce (demo)</button>` : ""}`);
 }
 
 function field(label, name, opts = {}) {
@@ -533,6 +542,7 @@ function render() {
   const view = viewNow();
   const screens = {
     boot: () => shell("Načítání", "<h1>Načítám…</h1>"),
+    unconfigured: viewUnconfigured,
     login: viewLogin,
     register: viewRegister,
     home: viewHome,
@@ -622,7 +632,13 @@ const actions = {
     go(view);
   },
   async "go-register"() { S.regStep = 1; S.draft = { noTaximeter: true }; go("register"); },
-  async "go-offer"() { S.draft = { paymentMethod: "hotovost" }; go("offer"); },
+  async "go-offer"() {
+    if (S.backend.mode !== "demo" && S.bundle?.carrier?.status !== "active") {
+      throw new Error("Účet čeká na ověření. Jízdu založíte až po schválení správcem.");
+    }
+    S.draft = { paymentMethod: "hotovost" };
+    go("offer");
+  },
   async "go-change"() { S.draft = {}; go("change"); },
   async "fill-demo"() {
     const { ...rest } = SAMPLE;
@@ -662,8 +678,8 @@ const actions = {
     S.draft = {};
     go("login");
   },
-  async "use-demo"() { localStorage.setItem("svezemete.mode", "demo"); location.reload(); },
-  async "use-remote"() { localStorage.setItem("svezemete.mode", "remote"); location.reload(); },
+  async "use-demo"() { throw new Error("Demo režim se zapíná jen v config.js hodnotou demo: true."); },
+  async "use-remote"() { location.reload(); },
   async ares() { await lookupAres(); },
   async "create-offer"() {
     const res = await S.backend.createOffer({
@@ -1205,20 +1221,30 @@ function bind() {
 async function boot() {
   bind();
   document.body.classList.toggle("night", S.night);
-  const wantRemote = configured() && localStorage.getItem("svezemete.mode") !== "demo";
-  S.backend = wantRemote ? remoteBackend() : demoBackend();
-  if (!wantRemote) localStorage.setItem("svezemete.mode", "demo");
+  const hasServer = configured();
+  if (!hasServer && !demoAllowed()) {
+    S.backend = null;
+    S.bundle = null;
+    S.view = "unconfigured";
+    render();
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+    return;
+  }
+  S.backend = hasServer ? remoteBackend() : demoBackend();
   try { if (S.backend.init) await S.backend.init(); } catch (err) { S.error = err.message; }
-  S.bundle = await S.backend.load();
+  try { S.bundle = await S.backend.load(); } catch (err) { S.error = err.message; S.bundle = null; }
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem("svezemete.ui") || "null"); } catch { /* ignore */ }
-  if (S.bundle) {
-    S.view = saved?.view && saved.view !== "login" && saved.view !== "boot" ? saved.view : "home";
+  if (S.bundle?.me) {
+    S.view = saved?.view && !["login", "boot", "unconfigured"].includes(saved.view) ? saved.view : "home";
     S.rideId = saved?.rideId || null;
     S.customerLock = !!saved?.customerLock;
     S.regStep = saved?.regStep || 1;
     if (!rideBy() && ["handoff", "customer", "order", "pin", "ready", "riding", "pay", "confirm", "change", "end-ask"].includes(S.view)) S.view = "home";
-  } else S.view = "login";
+  } else {
+    S.customerLock = false;
+    S.view = "login";
+  }
   render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
