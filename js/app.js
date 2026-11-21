@@ -240,7 +240,7 @@ function viewLogin() {
   const roster = demo ? S.backend.roster() : [];
   return shell("Přihlášení", `
     <h1>Vítejte</h1>
-    <p class="hint">Elektronická objednávka taxislužby pro samostatné řidiče. Každý řidič je svůj dopravce. Aplikace je zdarma a v této verzi nemá dispečink.</p>
+    <p class="hint">Aplikace slouží k elektronickému objednávání přepravy v taxislužbě. Je určena dopravcům, kteří splňují podmínky pro provozování taxislužby bez taxametru.</p>
     <form data-act="login" autocomplete="on" class="card c1 formcard">
       <span class="lbl">Už mám účet</span>
       <label>E-mail<input type="email" data-field="loginEmail" autocomplete="username" value="${esc(S.draft.loginEmail || "")}"></label>
