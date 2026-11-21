@@ -403,10 +403,13 @@ export function discardChange(db, actor, rideId) {
   return replaceRide(db, ride, { pendingOfferId: null }, actor.userId);
 }
 
-export function placeOrder(db, actor, { rideId, email, consentTerms, consentPrice, userAgent }) {
+export function placeOrder(db, actor, { rideId, email, consentTerms, consentPrice, userAgent, termsVersion }) {
   const ride = rideOf(db, rideId);
   must(ride, "Jízda neexistuje.");
   must(consentTerms === true && consentPrice === true, "Bez obou souhlasů nelze jízdu objednat.");
+  // Uloží se verze podmínek, kterou zákazník viděl; musí to být aktuální verze.
+  must(termsVersion === undefined || termsVersion === TERMS_VERSION,
+    "Obchodní podmínky se mezitím změnily. Přečtěte si aktuální znění a potvrďte objednávku znovu.");
   must(validEmail(email), "Zadejte e-mail, kam pošleme potvrzení.");
   const offerId = ride.pendingOfferId || (ride.status === "awaiting_customer" ? ride.currentOfferId : null);
   must(offerId, "Teď není co objednat.");

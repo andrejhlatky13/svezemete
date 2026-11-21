@@ -1,4 +1,4 @@
-import { TERMS_PARAS, PRIVACY_PARAS, TERMS_VERSION } from "./terms.js";
+import { TERMS_PARAS, PRIVACY_PARAS, TERMS_VERSION, TERMS_VERSIONS, TERMS_PAGE, termsLabel, termsHtml } from "./terms.js";
 import {
   PAYMENT_METHODS, RIDE_LABEL, STATUS_CARRIER, paymentLabel, formatKc, formatWhen, pragueParts,
   validEmail, validIco, registrationErrors, createEmptyDb, rehydrate, registerDriver, loginDemo,
@@ -249,7 +249,8 @@ function viewLogin() {
     </form>
     <button type="button" class="btn ghost" data-act="go-register">Registrovat se jako řidič</button>
     ${roster.length ? `<h2>Účty v tomto prohlížeči</h2>${roster.map((u) => `<button type="button" class="card-btn c2" data-act="pick-user" data-email="${esc(u.email)}"><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span></button>`).join("")}<p class="hint">Jen demo v tomto prohlížeči. Hesla se tu nezobrazují.</p>` : ""}
-    ${demo ? `<button type="button" class="btn ghost" data-act="demo-admin">Vstoupit jako správce (demo)</button>` : ""}`);
+    ${demo ? `<button type="button" class="btn ghost" data-act="demo-admin">Vstoupit jako správce (demo)</button>` : ""}
+    <p class="foot-links"><a href="${TERMS_PAGE}">Obchodní podmínky pro zákazníky</a></p>`);
 }
 
 function field(label, name, opts = {}) {
@@ -359,6 +360,7 @@ function partyBlock(s) {
     <div><span>Řidič</span><strong>${esc(s.driverName)}</strong></div>
     <div><span>Vozidlo</span><strong>${esc(s.make)} ${esc(s.model)}</strong></div>
     <div><span>RZ</span><strong class="rz">${esc(s.rz)}</strong></div>
+    ${s.email || s.phone ? `<div><span>Kontakt a reklamace</span><strong>${esc([s.email, s.phone].filter(Boolean).join(", "))}</strong></div>` : ""}
   </div>`;
 }
 
@@ -392,11 +394,48 @@ function kontrolBox(b, phase) {
   </div>`;
 }
 
+// Aktuální podmínky: z databáze (vzdálený režim), jinak z js/terms.js.
+function currentTerms() {
+  const id = S.bundle?.termsVersion || TERMS_VERSION;
+  const known = TERMS_VERSIONS[id];
+  const body = S.bundle?.terms?.length ? S.bundle.terms : (known?.body || TERMS_PARAS);
+  const label = known?.label || S.bundle?.termsTitle || `verze ${id}`;
+  const validFrom = S.bundle?.termsValidFrom || known?.validFrom || "";
+  return { id, body, label, validFrom, title: known?.title || "Obchodní podmínky" };
+}
+
+function termsHead(t) {
+  return `<div class="termshead">
+    <p class="termsver">${esc(t.title)}</p>
+    <p class="termsmeta">${esc(t.label)}${t.validFrom ? ` <span>|</span> platí pro objednávky od ${esc(t.validFrom)}` : ""}</p>
+  </div>`;
+}
+
+// QR kód a adresa veřejné stránky s podmínkami: zákazník si je uloží do svého telefonu.
+function termsSave() {
+  const url = new URL(TERMS_PAGE, location.href).href;
+  return `<div class="termssave">
+    <img src="qr-podminky.png" width="132" height="132" alt="QR kód s odkazem na obchodní podmínky">
+    <div><strong>Uložit podmínky do svého telefonu</strong>
+      <span>Naskenujte QR kód. Stránka obsahuje jen podmínky a jde uložit nebo vytisknout.</span>
+      <span class="url">${esc(url.replace(/^https:\/\//, ""))}</span></div>
+  </div>`;
+}
+
+function privacyDetails() {
+  return `<details class="privacy"><summary>Informace o zpracování osobních údajů</summary>
+    ${PRIVACY_PARAS.map((p) => `<h3>${esc(p.h)}</h3><p>${esc(p.p)}</p>`).join("")}</details>`;
+}
+
 function termsInline() {
-  const paras = S.bundle?.terms?.length ? S.bundle.terms : TERMS_PARAS;
-  const ver = S.bundle?.termsVersion || TERMS_VERSION;
-  return `<p class="termsver">Obchodní podmínky, verze ${esc(ver)}</p>
-    <div class="terms-box" tabindex="0" role="region" aria-label="Obchodní podmínky, verze ${esc(ver)}">${paras.map((p) => `<h2>${esc(p.h)}</h2><p>${esc(p.p)}</p>`).join("")}</div>`;
+  const t = currentTerms();
+  return `<h2 class="sec">Obchodní podmínky</h2>
+    ${termsHead(t)}
+    <div class="terms-box" tabindex="0" role="region" aria-label="Obchodní podmínky, ${esc(t.label)}">${termsHtml(t.body, esc)}</div>
+    <button type="button" class="btn ghost" data-act="show-terms" data-back="order">Číst podmínky na celé obrazovce</button>
+    ${termsSave()}
+    <p class="hint">Celé znění podmínek vám přijde také e-mailem spolu s potvrzením o přepravě.</p>
+    ${privacyDetails()}`;
 }
 
 function viewCustomer() {
@@ -430,7 +469,9 @@ function viewOrder() {
       <p class="hint">E-mail si zkontrolujte. Po objednání už nejde přepsat.</p>
       ${termsInline()}
       <label class="consent"><input type="checkbox" data-field="consentTerms" ${S.draft.consentTerms ? "checked" : ""}><span>Souhlasím s obchodními podmínkami</span></label>
-      <label class="consent"><input type="checkbox" data-field="consentPrice" ${S.draft.consentPrice ? "checked" : ""}><span>Souhlasím se smluvní cenou a danou trasou</span></label>
+      <label class="consent"><input type="checkbox" data-field="consentPrice" ${S.draft.consentPrice ? "checked" : ""}><span>Souhlasím se smluvní cenou a danou trasou přepravy</span></label>
+      <p class="paynote">Klepnutím na tlačítko objednáváte placenou přepravu. Vzniká vám povinnost zaplatit konečnou cenu ${formatKc(offer.priceKc)}.</p>
+      <p class="hint" id="order-need">${ready ? "" : "Tlačítko se zpřístupní po vyplnění e-mailu a zaškrtnutí obou souhlasů."}</p>
       <button class="btn xl" id="order-btn" type="submit" ${ready ? "" : "disabled"}>Objednávám jízdu za ${formatKc(offer.priceKc)}</button>
     </form>
     <button type="button" class="btn ghost" data-act="go" data-view="customer">Zpět na kontrolu</button>
@@ -438,14 +479,13 @@ function viewOrder() {
 }
 
 function viewTerms() {
-  const paras = (S.bundle?.terms?.length ? S.bundle.terms : TERMS_PARAS);
-  return shell("Režim zákazníka", `
+  const t = currentTerms();
+  return shell(S.customerLock ? "Režim zákazníka" : "Obchodní podmínky", `
     <h1>Obchodní podmínky</h1>
-    <p class="hint">Verze ${esc(S.bundle?.termsVersion || TERMS_VERSION)}</p>
-    <div class="terms">${paras.map((p) => `<h2>${esc(p.h)}</h2><p>${esc(p.p)}</p>`).join("")}
-      <h2>Informace o osobních údajích</h2>
-      ${PRIVACY_PARAS.map((p) => `<h2>${esc(p.h)}</h2><p>${esc(p.p)}</p>`).join("")}
-    </div>
+    ${termsHead(t)}
+    <div class="terms">${termsHtml(t.body, esc)}</div>
+    ${termsSave()}
+    ${privacyDetails()}
     <button type="button" class="btn" data-act="go" data-view="${esc(S.termsBack || "order")}">Zpět</button>`);
 }
 
@@ -675,7 +715,7 @@ function viewAdmin() {
     <h2>Audit</h2>
     <p class="hint">Poslední záznamy. Hesla, PIN ani certifikát se sem neukládají.</p>
     ${(a.audit || []).slice(0, 15).map((e) => `<p>${esc(pragueParts(e.ts).both)} · ${esc(e.table)} · ${esc(e.op)}</p>`).join("") || `<p class="empty">Zatím prázdné.</p>`}
-    <p class="hint">Verze podmínek ${esc(TERMS_VERSION)}. Starší verze se nemění, objednávka si pamatuje tu, kterou zákazník viděl.</p>`, true);
+    <p class="hint">Platné obchodní podmínky: ${esc(currentTerms().label)} (id ${esc(currentTerms().id)}). Starší verze se nemění, objednávka si pamatuje tu, kterou zákazník viděl.</p>`, true);
 }
 
 function render() {
@@ -864,9 +904,21 @@ const actions = {
   async "to-pin"() { S.customerLock = true; S.draft.pin = ""; go("pin"); },
   async "show-terms"(el) { S.termsBack = el.dataset.back || "order"; go("terms", { keepDraft: true }); },
   async "place-order"() {
-    await S.backend.placeOrder({
-      rideId: S.rideId, email: S.draft.email, consentTerms: S.draft.consentTerms === true, consentPrice: S.draft.consentPrice === true,
-    });
+    const termsVersion = currentTerms().id;
+    try {
+      await S.backend.placeOrder({
+        rideId: S.rideId, email: S.draft.email, consentTerms: S.draft.consentTerms === true, consentPrice: S.draft.consentPrice === true,
+        termsVersion,
+      });
+    } catch (err) {
+      if (/podmínky se mezitím změnily/i.test(err?.message || "")) {
+        // Nové znění: zobrazit ho a nechat zákazníka souhlasit znovu.
+        await refresh().catch(() => {});
+        S.draft.consentTerms = false;
+        S.draft.consentPrice = false;
+      }
+      throw err;
+    }
     await refresh();
     S.draft.pin = "";
     S.info = "Objednávka je uložená. Vraťte telefon řidiči.";
@@ -1056,7 +1108,14 @@ async function lookupAres() {
 
 function makeBundle(db, session, mode, terms) {
   if (!session) return null;
-  const base = { mode, db, terms: terms || null, termsVersion: TERMS_VERSION };
+  // terms = řádek z tabulky terms_versions (vzdálený režim) nebo null (demo: js/terms.js).
+  const base = {
+    mode, db,
+    terms: Array.isArray(terms?.body) ? terms.body : null,
+    termsVersion: terms?.id || TERMS_VERSION,
+    termsTitle: terms?.title || "",
+    termsValidFrom: terms?.published_at ? pragueParts(terms.published_at).date || "" : "",
+  };
   if (session.role === "admin") {
     return {
       ...base,
@@ -1207,7 +1266,7 @@ function remoteBackend() {
     cache = { users: [], carriers, drivers, vehicles, offers, orders, rides, payments, confirmations, deliveries, eetSettings, eetMessages, audit };
     session = { role: profile.role, userId: profile.id, carrierId: profile.carrier_id, email: profile.email };
     const t = await sb.from("terms_versions").select("*").order("published_at", { ascending: false }).limit(1);
-    terms = t.data?.[0]?.body || null;
+    terms = t.data?.[0] || null;
   }
   async function rpc(name, args) {
     const { data, error } = await sb.rpc(name, args);
@@ -1254,7 +1313,7 @@ function remoteBackend() {
     async checkPin(pin) { return rpc("check_pin", { p_pin: pin }); },
     async changePin(pin) { await rpc("set_pin", { p_pin: pin }); },
     async createOffer(input) { const d = await rpc("create_offer", { p_from: input.from, p_to: input.to, p_price: input.priceKc, p_method: input.paymentMethod }); return { rideId: d.rideId }; },
-    async placeOrder(input) { await rpc("place_order", { p_ride: input.rideId, p_email: input.email, p_terms: input.consentTerms, p_price: input.consentPrice, p_agent: navigator.userAgent }); },
+    async placeOrder(input) { await rpc("place_order", { p_ride: input.rideId, p_email: input.email, p_terms: input.consentTerms, p_price: input.consentPrice, p_agent: navigator.userAgent, p_terms_version: input.termsVersion }); },
     async startRide(id) { await rpc("start_ride", { p_ride: id }); },
     async endRide(id) { await rpc("end_ride", { p_ride: id }); },
     async markPaid(id) { await rpc("mark_paid", { p_ride: id }); },
@@ -1361,7 +1420,10 @@ function bind() {
     if (!el.dataset?.field) return;
     S.draft[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
     const btn = $("order-btn");
-    if (btn) btn.disabled = !(S.draft.consentTerms === true && S.draft.consentPrice === true && validEmail(S.draft.email));
+    const ready = S.draft.consentTerms === true && S.draft.consentPrice === true && validEmail(S.draft.email);
+    if (btn) btn.disabled = !ready;
+    const need = $("order-need");
+    if (need) need.textContent = ready ? "" : "Tlačítko se zpřístupní po vyplnění e-mailu a zaškrtnutí obou souhlasů.";
   });
   root.addEventListener("change", async (e) => {
     const el = e.target;
