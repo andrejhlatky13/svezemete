@@ -249,3 +249,33 @@ dl { margin: 0; }
   .app { margin: 24px auto; min-height: calc(100vh - 48px); border: 2px solid var(--outline); border-radius: 36px; overflow: hidden; }
   header { border-radius: 36px 36px 0 0; }
 }
+
+/* Kontrolní údaje na obrazovkách elektronické objednávky */
+.kontrol {
+  background: var(--panel); border: 2px solid var(--line); border-radius: 18px;
+  padding: 12px 16px 6px; margin: 14px 0;
+}
+.kontrol h2 {
+  margin: 0 0 8px; font-size: 18px; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--muted); font-weight: 800;
+}
+.kontrol > div {
+  display: grid; grid-template-columns: 1fr; gap: 2px; padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.kontrol > div:last-child { border-bottom: 0; }
+.kontrol span {
+  font-size: 15px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted);
+}
+.kontrol strong { margin: 0; font-size: 22px; font-weight: 800; word-break: break-word; }
+
+/* Obchodní podmínky přímo na souhlasu objednávky */
+.termsver { margin: 16px 0 8px; font-weight: 800; color: var(--cyan); }
+.terms-box {
+  max-height: 320px; overflow: auto; -webkit-overflow-scrolling: touch;
+  border: 2px solid var(--line); border-radius: 16px; padding: 12px 16px; margin: 8px 0 14px;
+  background: var(--panel);
+}
+.terms-box h2 { margin: 16px 0 8px; font-size: 21px; }
+.terms-box h2:first-child { margin-top: 4px; }
+.terms-box p { margin: 0 0 10px; font-size: 20px; color: var(--ink); line-height: 1.45; }
