@@ -1175,7 +1175,8 @@ function bind() {
   const root = $("app");
   root.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-act]");
-    if (!btn || btn.type === "submit") return;
+    // Formulář (přihlášení, objednávka) se spouští jen tlačítkem Odeslat, ne klepnutím do pole.
+    if (!btn || btn.tagName === "FORM" || btn.type === "submit") return;
     e.preventDefault();
     run(btn.dataset.act, btn);
   });
