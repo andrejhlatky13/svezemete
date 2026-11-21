@@ -345,6 +345,7 @@ function viewHandoff() {
     ${card("Odkud", esc(offer.fromPlace), "c1")}
     ${card("Kam", esc(offer.toPlace), "c2")}
     ${card("Dohodnutá konečná cena", `${formatKc(offer.priceKc)}<small>${esc(PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod))}</small>`, "c3")}
+    ${kontrolBox(b, "offer")}
     <p class="hint">${change ? "Nová cena a trasa začnou platit, až je zákazník znovu objedná. Do té doby platí původní objednávka." : "Stav: čeká na zákazníka. Objednávka ještě nevznikla. Telefon zamkne režim řidiče, zpět se dostanete PINem."}</p>
     <button type="button" class="btn xl" data-act="to-customer">Otevřít pro zákazníka</button>
     ${change ? `<button type="button" class="btn ghost" data-act="discard-change">Zrušit návrh změny</button>` : `<button type="button" class="btn ghost" data-act="go" data-view="ask-cancel">Zrušit nabídku</button>`}`);
@@ -361,6 +362,43 @@ function partyBlock(s) {
   </div>`;
 }
 
+
+function kontrolRow(label, value) {
+  if (!value) return "";
+  return `<div><span>${esc(label)}</span><strong>${value}</strong></div>`;
+}
+
+// Kompaktní přehled pro kontrolu objednávky (čas, dopravce, trasa, cena).
+function kontrolBox(b, phase) {
+  const offer = acceptedOffer(b) || b.offer;
+  if (!offer) return "";
+  const s = offer.snapshot || {};
+  const ordered = phase === "ordered" && b.order;
+  const timeLabel = ordered ? "Čas objednání" : "Čas vytvoření nabídky";
+  const timeIso = ordered ? b.order.orderedAt : offer.serverCreatedAt;
+  const timeSrc = ordered ? b.order.timeSource : offer.timeSource;
+  const pay = PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod);
+  return `<div class="kontrol" aria-label="Kontrolní údaje">
+    <h2>Kontrolní údaje</h2>
+    ${kontrolRow(timeLabel, esc(formatWhen(timeIso, timeSrc)))}
+    ${ordered && b.order.orderNumber ? kontrolRow("Číslo objednávky", esc(b.order.orderNumber)) : ""}
+    ${kontrolRow("Dopravce", esc(s.carrierName || ""))}
+    ${kontrolRow("IČO", esc(s.ico || ""))}
+    ${kontrolRow("Řidič", esc(s.driverName || ""))}
+    ${kontrolRow("SPZ vozidla", s.rz ? `<span class="rz">${esc(s.rz)}</span>` : "")}
+    ${kontrolRow("Trasa", `${esc(offer.fromPlace || "")} → ${esc(offer.toPlace || "")}`)}
+    ${kontrolRow("Dohodnutá konečná cena", formatKc(offer.priceKc))}
+    ${kontrolRow("Způsob platby", esc(pay || ""))}
+  </div>`;
+}
+
+function termsInline() {
+  const paras = S.bundle?.terms?.length ? S.bundle.terms : TERMS_PARAS;
+  const ver = S.bundle?.termsVersion || TERMS_VERSION;
+  return `<p class="termsver">Obchodní podmínky, verze ${esc(ver)}</p>
+    <div class="terms-box" tabindex="0" role="region" aria-label="Obchodní podmínky, verze ${esc(ver)}">${paras.map((p) => `<h2>${esc(p.h)}</h2><p>${esc(p.p)}</p>`).join("")}</div>`;
+}
+
 function viewCustomer() {
   const b = rideBy();
   const offer = acceptedOffer(b);
@@ -371,6 +409,7 @@ function viewCustomer() {
     <div class="price">${formatKc(offer.priceKc)}</div>
     <p class="pricemeta">Konečná cena <span>|</span> ${esc(PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod))}</p>
     ${partyBlock(s)}
+    ${kontrolBox(b, "offer")}
     ${offer.version > 1 ? `<div class="alert wait">Toto je změna oproti původní objednávce. Bez vašeho souhlasu platí původní cena a trasa.</div>` : ""}
     <button type="button" class="btn xl" data-act="go" data-view="order">Pokračovat k objednávce</button>
     <button type="button" class="btn ghost" data-act="show-terms" data-back="customer">Celý text podmínek a údajů</button>
@@ -385,10 +424,11 @@ function viewOrder() {
     <h1>Objednávka jízdy</h1>
     <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
     <div class="price sm">${formatKc(offer.priceKc)}</div>
+    ${kontrolBox(b, "offer")}
     <form data-act="place-order" autocomplete="off">
       <label>E-mail pro potvrzení<input class="light-in" type="email" data-field="email" inputmode="email" autocomplete="email" value="${esc(S.draft.email || "")}" placeholder="vas@email.cz"></label>
       <p class="hint">E-mail si zkontrolujte. Po objednání už nejde přepsat.</p>
-      <p class="termslink">Obchodní podmínky v${esc(S.bundle?.termsVersion || TERMS_VERSION)} <span>|</span> <button type="button" class="link" data-act="show-terms" data-back="order">Otevřít</button></p>
+      ${termsInline()}
       <label class="consent"><input type="checkbox" data-field="consentTerms" ${S.draft.consentTerms ? "checked" : ""}><span>Souhlasím s obchodními podmínkami</span></label>
       <label class="consent"><input type="checkbox" data-field="consentPrice" ${S.draft.consentPrice ? "checked" : ""}><span>Souhlasím se smluvní cenou a danou trasou</span></label>
       <button class="btn xl" id="order-btn" type="submit" ${ready ? "" : "disabled"}>Objednávám jízdu za ${formatKc(offer.priceKc)}</button>
@@ -428,6 +468,7 @@ function viewReady() {
     ${card("Potvrzeno zákazníkem", esc(formatWhen(b.order.orderedAt, b.order.timeSource)), "c2")}
     ${card("Dohodnutá konečná cena", `${formatKc(b.offer.priceKc)}<small>${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)} · ${esc(PAY_INFO[b.offer.paymentMethod]?.label || paymentLabel(b.offer.paymentMethod))}</small>`, "c3")}
     ${partyBlock(s)}
+    ${kontrolBox(b, "ordered")}
     ${b.pending ? `<div class="alert wait">Čeká souhlas zákazníka se změnou. Jízdu zatím nespouštějte.</div><button type="button" class="btn" data-act="go" data-view="handoff">Předejte telefon znovu</button>` : `<button type="button" class="btn xl go" data-act="start-ride">Začít jízdu</button>`}
     <button type="button" class="btn ghost" data-act="go-change">Změnit trasu nebo cenu</button>
     <button type="button" class="btn ghost" data-act="go" data-view="ask-cancel">Zrušit před jízdou</button>`);
@@ -467,6 +508,7 @@ function viewPay() {
     <p class="badge wait">Čeká na platbu</p>
     <div class="price">${formatKc(b.payment.amountKc)}</div>
     ${card("Způsob platby", `${esc(PAY_INFO[method]?.label || paymentLabel(method))}<small>${esc(PAY_INFO[method]?.sub || "")}</small>`, "c3")}
+    ${kontrolBox(b, "ordered")}
     <p class="hint">${texts[method] || ""} Způsob platby je daný objednávkou a nejde ho už změnit.</p>
     <button type="button" class="btn xl" data-act="mark-paid">${method === "hotovost" ? "Hotovost převzata" : "Označit jako zaplaceno"}</button>`);
 }
@@ -494,6 +536,7 @@ function viewConfirm() {
     <p class="badge ${paid ? "ok" : "wait"}">${paid ? "Zaplaceno" : "Čeká na platbu"}</p>
     <div class="infobox mail ${tone}" id="email-status"><div><span>${email.kind === "sent" ? "E-mail odeslán" : email.kind === "failed" ? "E-mail neodešel" : "E-mail"}${at ? ` | ${esc(at)}` : ""}</span><strong>${esc(b.confirmation.customerEmail || b.delivery?.to || "")}</strong></div>${email.kind === "sent" ? "" : `<p>${esc(email.text)}</p>`}</div>
     ${email.kind === "sent" ? "" : `<button type="button" class="btn" data-act="resend-email">Odeslat znovu</button>`}
+    ${kontrolBox(b, "ordered")}
     <dl class="infobox">${view.lines.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
     <p class="hint">Vystaveno ${esc(formatWhen(b.confirmation.createdAt, b.confirmation.timeSource))}. Záznam je neměnný.</p>
     ${eetBlock(view.eet)}

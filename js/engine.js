@@ -482,6 +482,10 @@ function buildBody(db, ride, offer, order, endedAt) {
     termsVersionId: order.termsVersionId,
     contentHash: offer.contentHash,
     timeSource: "demo-device",
+    orderedAt: pragueParts(order.orderedAt).both,
+    orderedAtIso: order.orderedAt,
+    offerCreatedAt: pragueParts(offer.serverCreatedAt).both,
+    offerCreatedAtIso: offer.serverCreatedAt,
   });
 }
 
@@ -671,7 +675,7 @@ export function setCarrierStatus(db, actor, carrierId, status) {
 }
 
 export function confirmationLines(body) {
-  return [
+  const lines = [
     ["Evidenční číslo", body.evidencniCislo],
     ["Dopravce", body.carrierName],
     ["Sídlo", body.sidlo],
@@ -680,6 +684,8 @@ export function confirmationLines(body) {
     ["Registrační značka", body.rz],
     ["Vozidlo", `${body.make} ${body.model}`.trim()],
     ["Datum", body.date],
+    body.orderedAt ? ["Čas objednání", body.orderedAt] : null,
+    body.offerCreatedAt ? ["Čas vytvoření nabídky", body.offerCreatedAt] : null,
     ["Zahájení", body.startedAt],
     ["Ukončení", body.endedAt],
     ["Odkud", body.from],
@@ -687,6 +693,7 @@ export function confirmationLines(body) {
     ["Konečná cena", formatKc(body.priceKc)],
     ["Způsob platby", body.paymentLabel || paymentLabel(body.paymentMethod)],
   ];
+  return lines.filter((row) => row && row[1] != null && row[1] !== "");
 }
 
 export function latestEet(db, rideId) {
@@ -767,7 +774,7 @@ function csvCell(v) {
 export function toCsv(db, carrierId) {
   const eetOn = !!db.eetSettings.find((e) => e.carrierId === carrierId && e.enabled);
   const header = [
-    "Číslo objednávky", "Datum", "Zahájení", "Ukončení", "Odkud", "Kam", "Konečná cena (Kč)",
+    "Číslo objednávky", "Datum", "Čas objednání", "Zahájení", "Ukončení", "Odkud", "Kam", "Konečná cena (Kč)",
     "Způsob platby", "Stav platby", "Dopravce", "IČO", "Řidič", "RZ", "Značka", "Model",
     "E-mail zákazníka", "Stav potvrzení",
   ];
@@ -780,7 +787,7 @@ export function toCsv(db, carrierId) {
     const emailCol = email.kind === "sent" ? "odesláno" : email.kind === "simulated" ? "simulace" : email.kind === "failed" ? "chyba" : "neodesláno";
     const pay = b.payment?.status === "paid" ? "ZAPLACENO" : "ČEKÁ NA PLATBU";
     const row = [
-      body.evidencniCislo, body.date, body.startedAt, body.endedAt, body.from, body.to, body.priceKc,
+      body.evidencniCislo, body.date, body.orderedAt || "", body.startedAt, body.endedAt, body.from, body.to, body.priceKc,
       body.paymentLabel, pay, body.carrierName, body.ico, body.driverName, body.rz, body.make, body.model,
       b.confirmation.customerEmail, emailCol,
     ];
