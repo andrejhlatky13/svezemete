@@ -20,7 +20,8 @@ const SAMPLE = {
 };
 
 const S = {
-  night: localStorage.getItem("svezemete.night") === "1",
+  // Tmavý vzhled je výchozí; světlý se zapne tlačítkem Den.
+  night: localStorage.getItem("svezemete.theme") !== "light",
   view: "boot",
   draft: {},
   error: "",
@@ -60,6 +61,7 @@ function rideBy(id) {
 function go(view, extra = {}) {
   if (extra.rideId !== undefined) S.rideId = extra.rideId;
   if (extra.keepDraft !== true && extra.resetDraft) S.draft = {};
+  const changed = S.view !== view;
   S.view = view;
   try {
     sessionStorage.setItem("svezemete.ui", JSON.stringify({
@@ -67,6 +69,7 @@ function go(view, extra = {}) {
     }));
   } catch { /* ignore */ }
   render();
+  if (changed) window.scrollTo(0, 0);
 }
 
 async function refresh() {
@@ -81,18 +84,27 @@ function viewNow() {
   return S.view;
 }
 
-function shell(title, body, wide) {
+const PAY_INFO = {
+  hotovost: { label: "Hotově", sub: "Řidič po dokončení jízdy", short: "Hotově" },
+  karta: { label: "Platební kartou", sub: "Terminál řidiče / online dle nabídky", short: "Karta" },
+  qr: { label: "QR platbou", sub: "Bankovní převod na účet dopravce", short: "QR" },
+  faktura: { label: "Na fakturu", sub: "Po schválení, se sjednanou splatností", short: "Faktura" },
+};
+
+function shell(mode, body, wide) {
   const who = S.bundle?.me;
   return `<div class="app${wide ? " wide" : ""}">
     <header>
-      <div class="brand"><div class="mark" aria-hidden="true">ST</div><div><div class="nm">SvezemeTě</div><div class="sub">${esc(title)}</div></div></div>
+      <div class="brand"><div class="mark" aria-hidden="true">S</div><div class="nm">SvezemeTě</div></div>
       <div class="tools">
-        ${S.customerLock ? "" : `<button type="button" class="tool" data-act="toggle-night">${S.night ? "Den" : "Noc"}</button>`}
+        ${S.customerLock ? "" : `<button type="button" class="tool" data-act="toggle-night" title="Přepnout světlý a tmavý vzhled">${S.night ? "Den" : "Noc"}</button>`}
         ${who && !S.customerLock ? `<button type="button" class="tool" data-act="logout">Odhlásit</button>` : ""}
       </div>
     </header>
+    <div class="rule" aria-hidden="true"></div>
     ${S.backend?.mode === "demo" ? `<div class="banner">DEMO REŽIM. Data zůstávají jen v tomto prohlížeči. E-mail se neodesílá a čas objednávky je simulace času serveru.</div>` : ""}
     <main>
+      <p class="mode">${esc(mode)}</p>
       ${S.error ? `<div class="alert bad" role="alert">${esc(S.error)}</div>` : ""}
       ${S.info ? `<div class="alert ok" role="status">${esc(S.info)}</div>` : ""}
       ${body}
@@ -100,11 +112,23 @@ function shell(title, body, wide) {
   </div>`;
 }
 
+// Datová karta: malý popisek, výrazná hodnota, barevný proužek vlevo (c1 tyrkys, c2 modrá, c3 fialová).
+function card(label, value, accent = "c1", extra = "") {
+  return `<div class="card ${accent}"><span class="lbl">${label}</span><strong class="val">${value}</strong>${extra}</div>`;
+}
+
+function payOptions(current, opts = {}) {
+  if (opts.grid) {
+    return `<div class="paygrid" role="radiogroup" aria-label="Způsob platby">${PAYMENT_METHODS.map((p) => `<button type="button" class="payopt sm${current === p.id ? " on" : ""}" role="radio" aria-checked="${current === p.id}" data-act="pick-pay" data-method="${p.id}"><span class="dot" aria-hidden="true"></span><strong>${PAY_INFO[p.id]?.short || p.label}</strong></button>`).join("")}</div>`;
+  }
+  return `<div class="paylist" role="radiogroup" aria-label="Způsob platby">${PAYMENT_METHODS.map((p) => `<button type="button" class="payopt${current === p.id ? " on" : ""}" role="radio" aria-checked="${current === p.id}" data-act="pick-pay" data-method="${p.id}"><span class="dot" aria-hidden="true"></span><span><strong>${PAY_INFO[p.id]?.label || p.label}</strong><small>${PAY_INFO[p.id]?.sub || ""}</small></span></button>`).join("")}</div>`;
+}
+
 function rideCard(b) {
-  return `<button type="button" class="card-btn" data-act="open-ride" data-id="${b.ride.id}">
+  return `<button type="button" class="card-btn c2" data-act="open-ride" data-id="${b.ride.id}">
     <span class="badge">${esc(RIDE_LABEL[b.ride.status] || b.ride.status)}</span>
     <strong>${esc(b.offer?.fromPlace || "Nabídka")} → ${esc(b.offer?.toPlace || "")}</strong>
-    <span>${b.offer ? formatKc(b.offer.priceKc) : ""} · ${esc(paymentLabel(b.offer?.paymentMethod))}</span>
+    <span class="accent">${b.offer ? formatKc(b.offer.priceKc) : ""} · ${esc(paymentLabel(b.offer?.paymentMethod))}</span>
   </button>`;
 }
 
@@ -121,29 +145,90 @@ function queuedEet() {
   return [...latest.values()].some((m) => m.status === "queued");
 }
 
+// Oblíbené trasy řidiče: jen z jeho vlastních jízd v aplikaci (bez mapových služeb).
+function favouriteRoutes(limit = 4) {
+  const map = new Map();
+  for (const r of S.bundle?.rides || []) {
+    const o = r.offer;
+    if (!o?.fromPlace || !o?.toPlace) continue;
+    const key = `${o.fromPlace.trim().toLowerCase()}|${o.toPlace.trim().toLowerCase()}`;
+    const hit = map.get(key);
+    const when = String(r.ride.createdAt || "");
+    if (!hit) map.set(key, { from: o.fromPlace, to: o.toPlace, price: o.priceKc, method: o.paymentMethod, count: 1, when });
+    else {
+      hit.count += 1;
+      if (when > hit.when) Object.assign(hit, { from: o.fromPlace, to: o.toPlace, price: o.priceKc, method: o.paymentMethod, when });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || b.when.localeCompare(a.when)).slice(0, limit);
+}
+
+function lastStart() {
+  const r = (S.bundle?.rides || []).find((x) => x.offer?.fromPlace);
+  return r ? r.offer.fromPlace : "";
+}
+
 function viewHome() {
   if (S.bundle.me.role === "admin") return viewAdmin();
   const b = S.bundle;
   if (b.carrier.status !== "active") {
-    return shell("Účet", `
+    return shell("Registrace / stav", `
       <h1>${esc(b.carrier.name)}</h1>
-      <p class="badge wait">${esc(STATUS_CARRIER[b.carrier.status] || b.carrier.status)}</p>
-      <p>Než správce registraci schválí, jízdu založit nejde. Údaje jsou uložené a můžete si je zkontrolovat.</p>
+      ${card("Stav registrace", esc(STATUS_CARRIER[b.carrier.status] || b.carrier.status), "c3")}
+      <p class="hint">Než správce registraci schválí, jízdu založit nejde. Údaje jsou uložené a můžete si je zkontrolovat.</p>
       <button type="button" class="btn" data-act="go" data-view="profile">Můj profil</button>`);
   }
   const today = pragueParts(new Date().toISOString()).key;
   const todays = b.rides.filter((r) => r.ride.status !== "cancelled" && pragueParts(r.ride.createdAt).key === today);
   const unfinished = b.rides.filter((r) => r.ride.status === "completed" && !r.delivery);
-  return shell("Řidič", `
-    <p class="hello">${esc(b.driver.firstName)} · ${esc(b.vehicle.rz)}</p>
-    <button type="button" class="btn xl" data-act="go-offer">Nová jízda</button>
+  return shell("Režim řidiče", `
+    <h1>Dobrý den, ${esc(b.driver.firstName)}</h1>
+    ${card("Vozidlo", `${esc(b.vehicle.make)} ${esc(b.vehicle.model)} · ${esc(b.vehicle.rz)}`, "c2")}
+    <button type="button" class="btn xl" data-act="go-quick">Nová jízda</button>
     ${unfinished.map((r) => `<button type="button" class="btn dark" data-act="open-ride" data-id="${r.ride.id}">Dokončit platbu a potvrzení<br>${esc(r.offer.fromPlace)} → ${esc(r.offer.toPlace)}</button>`).join("")}
     ${queuedEet() ? `<div class="alert wait">EET čeká na odeslání. Jízdy jedou dál.</div><button type="button" class="btn ghost" data-act="flush-eet">Odeslat čekající EET (zkušební)</button>` : ""}
     <button type="button" class="btn ghost" data-act="go" data-view="inspect">Pro kontrolu</button>
     <h2>Dnešní jízdy</h2>
     ${todays.length ? todays.map(rideCard).join("") : `<p class="empty">Dnes ještě žádná jízda. Klepněte na Nová jízda.</p>`}
-    <button type="button" class="btn ghost" data-act="go" data-view="history">Historie a export</button>
-    <button type="button" class="btn ghost" data-act="go" data-view="profile">Můj profil</button>`);
+    <div class="row2">
+      <button type="button" class="btn ghost" data-act="go" data-view="history">Historie a export</button>
+      <button type="button" class="btn ghost" data-act="go" data-view="profile">Můj profil</button>
+    </div>`);
+}
+
+function viewQuick() {
+  const favs = favouriteRoutes();
+  return shell("Rychlá objednávka", `
+    <h1>Kam pojedeme?</h1>
+    <label class="card c1 incard"><span class="lbl">Nástup <em>upravit</em></span>
+      <input data-field="from" value="${esc(S.draft.from ?? "")}" autocomplete="off" placeholder="Místo nástupu"></label>
+    <h2>Oblíbené trasy</h2>
+    ${favs.length ? favs.map((f, i) => `<button type="button" class="card-btn ${["c1", "c2", "c3"][i % 3]}" data-act="pick-fav" data-i="${i}">
+        <strong>${esc(f.from)} → ${esc(f.to)}</strong>
+        <span class="accent">Uložená nabídka: ${formatKc(f.price)}</span>
+      </button>`).join("") : `<p class="empty">Zatím žádné oblíbené trasy. Objeví se tu samy podle vašich jízd.</p>`}
+    <p class="hint">Oblíbené trasy jsou vaše nejčastější jízdy s poslední cenou. Cenu a trasu před předáním ještě zkontrolujete.</p>
+    <button type="button" class="btn xl" data-act="quick-other">Zadat jiný cíl</button>
+    <button type="button" class="btn ghost" data-act="go-offer">Celý formulář trasy</button>
+    <button type="button" class="btn ghost" data-act="go" data-view="home">Zpět</button>`);
+}
+
+function viewPrice() {
+  const method = S.draft.paymentMethod || "hotovost";
+  return shell("Rychlá objednávka", `
+    <h1>Cena a platba</h1>
+    <div class="card c1 incard"><span class="lbl">Trasa <em>upravit</em></span>
+      <input data-field="from" value="${esc(S.draft.from || "")}" autocomplete="off" placeholder="Odkud" aria-label="Odkud">
+      <span class="arrow" aria-hidden="true">↓</span>
+      <input data-field="to" value="${esc(S.draft.to || "")}" autocomplete="off" placeholder="Kam" aria-label="Kam" ${S.draft.to ? "" : "autofocus"}>
+    </div>
+    <label class="card c2 incard"><span class="lbl">Konečná cena v Kč <em>upravit</em></span>
+      <input class="price-in" data-field="priceKc" inputmode="numeric" value="${esc(S.draft.priceKc || "")}" placeholder="850"></label>
+    <h2>Způsob platby</h2>
+    ${payOptions(method, { grid: true })}
+    <p class="hint">Zákazník uvidí konečnou cenu, trasu, dopravce, řidiče a vozidlo ještě před objednáním. Jízdu nelze zahájit dřív.</p>
+    <button type="button" class="btn xl" data-act="create-offer">Předat zákazníkovi</button>
+    <button type="button" class="btn ghost" data-act="go" data-view="quick">Zpět</button>`);
 }
 
 function viewUnconfigured() {
@@ -155,15 +240,15 @@ function viewLogin() {
   const roster = demo ? S.backend.roster() : [];
   return shell("Přihlášení", `
     <h1>Vítejte</h1>
-    <p>Elektronická objednávka taxislužby pro samostatné řidiče. Každý řidič je svůj dopravce. Aplikace je zdarma a v této verzi nemá dispečink.</p>
-    <button type="button" class="btn xl" data-act="go-register">Registrovat se jako řidič</button>
-    <h2>Už mám účet</h2>
-    <form data-act="login" autocomplete="on">
+    <p class="hint">Elektronická objednávka taxislužby pro samostatné řidiče. Každý řidič je svůj dopravce. Aplikace je zdarma a v této verzi nemá dispečink.</p>
+    <form data-act="login" autocomplete="on" class="card c1 formcard">
+      <span class="lbl">Už mám účet</span>
       <label>E-mail<input type="email" data-field="loginEmail" autocomplete="username" value="${esc(S.draft.loginEmail || "")}"></label>
       <label>Heslo<input type="password" data-field="password" autocomplete="current-password"></label>
       <button class="btn" type="submit">Přihlásit</button>
     </form>
-    ${roster.length ? `<h2>Účty v tomto prohlížeči</h2>${roster.map((u) => `<button type="button" class="card-btn" data-act="pick-user" data-email="${esc(u.email)}"><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span></button>`).join("")}<p class="hint">Jen demo v tomto prohlížeči. Hesla se tu nezobrazují.</p>` : ""}
+    <button type="button" class="btn ghost" data-act="go-register">Registrovat se jako řidič</button>
+    ${roster.length ? `<h2>Účty v tomto prohlížeči</h2>${roster.map((u) => `<button type="button" class="card-btn c2" data-act="pick-user" data-email="${esc(u.email)}"><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span></button>`).join("")}<p class="hint">Jen demo v tomto prohlížeči. Hesla se tu nezobrazují.</p>` : ""}
     ${demo ? `<button type="button" class="btn ghost" data-act="demo-admin">Vstoupit jako správce (demo)</button>` : ""}`);
 }
 
@@ -177,9 +262,13 @@ function field(label, name, opts = {}) {
   return `<label>${label}<input type="${type}" data-field="${name}" value="${esc(val)}" ${opts.mode ? `inputmode="${opts.mode}"` : ""} ${opts.ac ? `autocomplete="${opts.ac}"` : ""} ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ""}></label>`;
 }
 
+function doc(title, inner, open) {
+  return `<details class="doc"${open ? " open" : ""}><summary><span>${title}</span><b aria-hidden="true">+</b></summary><div class="docin">${inner}</div></details>`;
+}
+
 function viewRegister() {
   const step = S.regStep;
-  const titles = ["", "Údaje dopravce", "Účet", "Řidič a vozidlo", "Odeslat k ověření"];
+  const titles = ["", "Údaje dopravce", "Vytvořte účet", "Řidič a vozidlo", "Odeslat ke kontrole"];
   let body = "";
   if (step === 1) {
     body = `${field("Jméno a příjmení nebo název firmy", "name")}${field("IČO", "ico", { mode: "numeric" })}
@@ -198,30 +287,32 @@ function viewRegister() {
       <p class="hint">PIN zadáte, když vám zákazník vrátí telefon. Bez něj se do režimu řidiče nevrátíte.</p>`;
   } else if (step === 3) {
     body = `<div class="row2">${field("Jméno řidiče", "firstName")}${field("Příjmení", "lastName")}</div>
-      ${field("Číslo oprávnění řidiče taxislužby", "licenceNumber")}
-      ${field("Platnost oprávnění", "licenceUntil", { type: "date" })}
       ${field("Registrační značka", "rz")}<div class="row2">${field("Tovární značka", "make")}${field("Obchodní označení", "model")}</div>
-      ${field("Výpis z evidence vozidel taxislužby", "registryNote", { placeholder: "číslo nebo poznámka" })}
-      ${field("Koncese (číslo, pokud ho máte u sebe)", "concessionNumber")}
-      ${field("Platnost koncese", "concessionUntil", { type: "date" })}
+      <h2>Doklady</h2>
+      ${doc("Koncese dopravce", `${field("Koncese (číslo, pokud ho máte u sebe)", "concessionNumber")}${field("Platnost koncese", "concessionUntil", { type: "date" })}`)}
+      ${doc("Průkaz řidiče taxislužby", `${field("Číslo oprávnění řidiče taxislužby", "licenceNumber")}${field("Platnost oprávnění", "licenceUntil", { type: "date" })}`, true)}
+      ${doc("Evidence vozidla a nálepka", `${field("Výpis z evidence vozidel taxislužby", "registryNote", { placeholder: "číslo nebo poznámka" })}`, true)}
+      ${doc("Platná STK / emise", `<p class="hint">Mějte ve vozidle platnou technickou a emisní kontrolu. Aplikace ji neukládá.</p>`)}
+      ${doc("Povinné ručení pro taxi", `<p class="hint">Pojištění odpovědnosti musí krýt provoz taxislužby. Aplikace ho neukládá.</p>`)}
       ${field("Jezdím bez taxametru, jen na elektronickou objednávku (§ 21 odst. 6). Vozidlo nemá střešní svítilnu ani nápis TAXI.", "noTaximeter", { type: "checkbox", defaultOn: true })}`;
   } else {
     const d = S.draft;
-    body = `<p><strong>${esc(d.name || "")}</strong><br>IČO ${esc(d.ico || "")}<br>${esc([d.street, d.zip, d.city].filter(Boolean).join(", "))}</p>
-      <p>Řidič ${esc(d.firstName || "")} ${esc(d.lastName || "")}<br>Vozidlo ${esc(d.make || "")} ${esc(d.model || "")} · ${esc(d.rz || "")}</p>
-      <p>Přihlášení ${esc(d.loginEmail || d.email || "")}</p>
-      ${S.backend.mode === "demo"
-        ? `<div class="alert wait">V demo režimu je registrace hned aktivní, ať jde jízdu vyzkoušet. Na serveru zůstane ve stavu Čeká na ověření, dokud ji správce neschválí.</div>`
-        : `<div class="alert wait">Po odeslání je stav Čeká na ověření. Jezdit půjde až po schválení správcem.</div>`}
+    body = `${card("Dopravce", `${esc(d.name || "")}<small>IČO ${esc(d.ico || "")} · ${esc([d.street, d.zip, d.city].filter(Boolean).join(", "))}</small>`, "c1")}
+      ${card("Řidič a vozidlo", `${esc(d.firstName || "")} ${esc(d.lastName || "")}<small>${esc(d.make || "")} ${esc(d.model || "")} · ${esc(d.rz || "")}</small>`, "c2")}
+      ${card("Přihlášení", esc(d.loginEmail || d.email || ""), "c3")}
+      ${card("Stav registrace", S.backend.mode === "demo" ? "V demu hned aktivní" : "Po odeslání čeká na ověření", "c3")}
+      <p class="hint">${S.backend.mode === "demo"
+        ? "V demo režimu je registrace hned aktivní, ať jde jízdu vyzkoušet. Na serveru zůstane ve stavu Čeká na ověření, dokud ji správce neschválí."
+        : "Po odeslání je stav Čeká na ověření. Jezdit půjde až po schválení správcem."}</p>
       ${field("Beru na vědomí, že aplikace je bezplatný nástroj, údaje o jízdách jsou neměnné a za přepravu odpovídám já jako dopravce.", "acceptPlatform", { type: "checkbox" })}
       <p class="hint">Evidence tržeb (EET 2.0) se při registraci nezapíná. Později ji lze přidat v profilu. Dokud je vypnutá, v jízdě ani v e-mailu se neobjeví.</p>`;
   }
-  return shell("Registrace", `
-    <div class="steps">${[1, 2, 3, 4].map((n) => `<span class="${n === step ? "on" : ""}">${n}</span>`).join("")}</div>
+  const next = ["", "Pokračovat na účet", "Pokračovat na řidiče a vozidlo", "Pokračovat ke kontrole", "Odeslat registraci k ověření"][step];
+  return shell(`Registrace / ${step} ze 4`, `
+    <div class="steps" aria-hidden="true">${[1, 2, 3, 4].map((n) => `<span class="${n <= step ? "on" : ""}"></span>`).join("")}</div>
     <h1>${titles[step]}</h1>
-    <p class="hint">Krok ${step} ze 4</p>
     ${body}
-    <button type="button" class="btn xl" data-act="${step === 4 ? "reg-submit" : "reg-next"}">${step === 4 ? "Odeslat registraci" : "Pokračovat"}</button>
+    <button type="button" class="btn xl" data-act="${step === 4 ? "reg-submit" : "reg-next"}">${next}</button>
     ${step > 1 ? `<button type="button" class="btn ghost" data-act="reg-back">Zpět</button>` : `<button type="button" class="btn ghost" data-act="go" data-view="login">Zpět na přihlášení</button>`}`);
 }
 
@@ -231,14 +322,15 @@ function acceptedOffer(b) {
 
 function viewOffer() {
   const method = S.draft.paymentMethod || "hotovost";
-  return shell("Nová jízda", `
-    <h1>Zadejte trasu a cenu</h1>
-    <p>Zákazník uvidí konečnou cenu a trasu ještě před objednáním. Jízdu nelze zahájit dřív.</p>
-    <label>Odkud<input data-field="from" value="${esc(S.draft.from || "")}" autocomplete="off"></label>
-    <label>Kam<input data-field="to" value="${esc(S.draft.to || "")}" autocomplete="off"></label>
-    <label>Konečná cena v Kč<input class="price-in" data-field="priceKc" inputmode="numeric" value="${esc(S.draft.priceKc || "")}" placeholder="850"></label>
-    <label>Způsob platby<select data-field="paymentMethod">${PAYMENT_METHODS.map((p) => `<option value="${p.id}" ${method === p.id ? "selected" : ""}>${p.label}</option>`).join("")}</select></label>
-    <button type="button" class="btn xl" data-act="create-offer">Pokračovat</button>
+  return shell("Režim řidiče", `
+    <h1>Zadej trasu</h1>
+    <label class="card c1 incard"><span class="lbl">Odkud</span><input data-field="from" value="${esc(S.draft.from || "")}" autocomplete="off"></label>
+    <label class="card c2 incard"><span class="lbl">Kam</span><input data-field="to" value="${esc(S.draft.to || "")}" autocomplete="off"></label>
+    <label class="card c3 incard"><span class="lbl">Dohodnutá konečná cena v Kč</span><input class="price-in" data-field="priceKc" inputmode="numeric" value="${esc(S.draft.priceKc || "")}" placeholder="850"></label>
+    <h2>Způsob platby</h2>
+    ${payOptions(method)}
+    <p class="hint">Zákazník uvidí konečnou cenu a trasu ještě před objednáním. Jízdu nelze zahájit dřív.</p>
+    <button type="button" class="btn xl" data-act="create-offer">Zkontrolovat nabídku</button>
     <button type="button" class="btn ghost" data-act="go" data-view="home">Zpět</button>`);
 }
 
@@ -247,32 +339,37 @@ function viewHandoff() {
   if (!b) return viewHome();
   const offer = acceptedOffer(b);
   const change = !!b.pending;
-  return shell(change ? "Změna" : "Zákazník", `
-    <h1>${change ? "Změna čeká na zákazníka" : "Předejte telefon"}</h1>
-    <p>${change ? "Nová cena a trasa začnou platit, až je zákazník znovu objedná. Do té doby platí původní objednávka." : "Stav: čeká na zákazníka. Objednávka ještě nevznikla."}</p>
+  return shell(change ? "Změna nabídky" : "Režim řidiče", `
+    <h1>${change ? "Změna čeká na zákazníka" : "Předej telefon"}</h1>
     ${change ? `<p class="old">Dosud platí ${formatKc(b.offer.priceKc)} · ${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)}</p>` : ""}
-    <div class="price">${formatKc(offer.priceKc)}</div>
-    <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
-    <p style="text-align:center">${esc(paymentLabel(offer.paymentMethod))}</p>
-    <button type="button" class="btn xl" data-act="to-customer">Zákazník je připraven</button>
+    ${card("Odkud", esc(offer.fromPlace), "c1")}
+    ${card("Kam", esc(offer.toPlace), "c2")}
+    ${card("Dohodnutá konečná cena", `${formatKc(offer.priceKc)}<small>${esc(PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod))}</small>`, "c3")}
+    <p class="hint">${change ? "Nová cena a trasa začnou platit, až je zákazník znovu objedná. Do té doby platí původní objednávka." : "Stav: čeká na zákazníka. Objednávka ještě nevznikla. Telefon zamkne režim řidiče, zpět se dostanete PINem."}</p>
+    <button type="button" class="btn xl" data-act="to-customer">Otevřít pro zákazníka</button>
     ${change ? `<button type="button" class="btn ghost" data-act="discard-change">Zrušit návrh změny</button>` : `<button type="button" class="btn ghost" data-act="go" data-view="ask-cancel">Zrušit nabídku</button>`}`);
 }
 
 function partyBlock(s) {
-  return `<h2>Dopravce</h2><p><strong>${esc(s.carrierName)}</strong><br>${esc(s.sidlo)}<br>IČO ${esc(s.ico)}</p>
-    <h2>Řidič</h2><p><strong>${esc(s.driverName)}</strong></p>
-    <h2>Vozidlo</h2><p class="rz">${esc(s.rz)}</p><p>${esc(s.make)} ${esc(s.model)}</p>`;
+  return `<div class="infobox">
+    <div><span>Dopravce</span><strong>${esc(s.carrierName)}</strong></div>
+    <div><span>IČO</span><strong>${esc(s.ico)}</strong></div>
+    <div><span>Sídlo</span><strong>${esc(s.sidlo)}</strong></div>
+    <div><span>Řidič</span><strong>${esc(s.driverName)}</strong></div>
+    <div><span>Vozidlo</span><strong>${esc(s.make)} ${esc(s.model)}</strong></div>
+    <div><span>RZ</span><strong class="rz">${esc(s.rz)}</strong></div>
+  </div>`;
 }
 
 function viewCustomer() {
   const b = rideBy();
   const offer = acceptedOffer(b);
   const s = offer.snapshot;
-  return shell("Kontrola nabídky", `
-    <p class="kicker">Konečná cena</p>
+  return shell("Režim zákazníka", `
+    <h1>Vaše jízda</h1>
+    <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
     <div class="price">${formatKc(offer.priceKc)}</div>
-    <div class="routebox"><div><span>Odkud</span><strong>${esc(offer.fromPlace)}</strong></div><div><span>Kam</span><strong>${esc(offer.toPlace)}</strong></div></div>
-    <p style="text-align:center">Platba: ${esc(paymentLabel(offer.paymentMethod))}</p>
+    <p class="pricemeta">Konečná cena <span>|</span> ${esc(PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod))}</p>
     ${partyBlock(s)}
     ${offer.version > 1 ? `<div class="alert wait">Toto je změna oproti původní objednávce. Bez vašeho souhlasu platí původní cena a trasa.</div>` : ""}
     <button type="button" class="btn xl" data-act="go" data-view="order">Pokračovat k objednávce</button>
@@ -284,24 +381,25 @@ function viewOrder() {
   const b = rideBy();
   const offer = acceptedOffer(b);
   const ready = S.draft.consentTerms === true && S.draft.consentPrice === true && validEmail(S.draft.email);
-  return shell("Objednávka", `
-    <div class="price sm">${formatKc(offer.priceKc)}</div>
+  return shell("Potvrzení objednávky", `
+    <h1>Objednávka jízdy</h1>
     <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
+    <div class="price sm">${formatKc(offer.priceKc)}</div>
     <form data-act="place-order" autocomplete="off">
+      <label>E-mail pro potvrzení<input class="light-in" type="email" data-field="email" inputmode="email" autocomplete="email" value="${esc(S.draft.email || "")}" placeholder="vas@email.cz"></label>
+      <p class="hint">E-mail si zkontrolujte. Po objednání už nejde přepsat.</p>
+      <p class="termslink">Obchodní podmínky v${esc(S.bundle?.termsVersion || TERMS_VERSION)} <span>|</span> <button type="button" class="link" data-act="show-terms" data-back="order">Otevřít</button></p>
       <label class="consent"><input type="checkbox" data-field="consentTerms" ${S.draft.consentTerms ? "checked" : ""}><span>Souhlasím s obchodními podmínkami</span></label>
       <label class="consent"><input type="checkbox" data-field="consentPrice" ${S.draft.consentPrice ? "checked" : ""}><span>Souhlasím se smluvní cenou a danou trasou</span></label>
-      <label>E-mail pro potvrzení<input type="email" data-field="email" inputmode="email" autocomplete="email" value="${esc(S.draft.email || "")}" placeholder="vas@email.cz"></label>
-      <p class="hint">E-mail si zkontrolujte. Po objednání už nejde přepsat.</p>
       <button class="btn xl" id="order-btn" type="submit" ${ready ? "" : "disabled"}>Objednávám jízdu za ${formatKc(offer.priceKc)}</button>
     </form>
-    <button type="button" class="btn ghost" data-act="show-terms" data-back="order">Znovu zobrazit podmínky</button>
     <button type="button" class="btn ghost" data-act="go" data-view="customer">Zpět na kontrolu</button>
     <p class="hint">Objednávka se uloží s časem serveru ještě před zahájením jízdy. Bez ní jízdu nelze zahájit.</p>`);
 }
 
 function viewTerms() {
   const paras = (S.bundle?.terms?.length ? S.bundle.terms : TERMS_PARAS);
-  return shell("Podmínky", `
+  return shell("Režim zákazníka", `
     <h1>Obchodní podmínky</h1>
     <p class="hint">Verze ${esc(S.bundle?.termsVersion || TERMS_VERSION)}</p>
     <div class="terms">${paras.map((p) => `<h2>${esc(p.h)}</h2><p>${esc(p.p)}</p>`).join("")}
@@ -315,25 +413,21 @@ function viewPin() {
   const n = (S.draft.pin || "").length;
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"];
   return shell("PIN řidiče", `
-    <h1>Vraťte telefon řidiči</h1>
-    <p>Pro návrat do režimu řidiče zadejte čtyřmístný PIN.</p>
+    <h1>Zpět pro řidiče</h1>
+    <p class="hint">Pro návrat do režimu řidiče zadejte čtyřmístný PIN.</p>
     <div class="dots" aria-label="Zadané číslice">${[0, 1, 2, 3].map((i) => `<span class="${i < n ? "on" : ""}"></span>`).join("")}</div>
-    <div class="pad">${keys.map((k) => k === "" ? "<span></span>" : `<button type="button" class="key" data-act="pin-key" data-key="${k === "⌫" ? "del" : k}">${k}</button>`).join("")}</div>`);
+    <div class="pad">${keys.map((k) => k === "" ? "<span></span>" : `<button type="button" class="key" data-act="pin-key" data-key="${k === "⌫" ? "del" : k}" aria-label="${k === "⌫" ? "Smazat" : k}">${k}</button>`).join("")}</div>`);
 }
 
 function viewReady() {
   const b = rideBy();
   const s = b.offer.snapshot;
-  return shell("Objednáno", `
-    <p class="badge ok">Objednáno ${esc(b.order?.orderNumber || "")}</p>
-    <div class="price">${formatKc(b.offer.priceKc)}</div>
-    <p class="route">${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)}</p>
-    <h2>Před zahájením jízdy</h2>
-    <p><strong>${esc(s.carrierName)}</strong><br>${esc(s.sidlo)}<br>IČO ${esc(s.ico)}</p>
-    <p>Řidič <strong>${esc(s.driverName)}</strong></p>
-    <p class="rz">${esc(s.rz)}</p>
-    <p>${esc(s.make)} ${esc(s.model)}</p>
-    <p class="hint">Objednáno ${esc(formatWhen(b.order.orderedAt, b.order.timeSource))}</p>
+  return shell("Před zahájením jízdy", `
+    <h1>Jízda objednána</h1>
+    ${card("Číslo objednávky", esc(b.order?.orderNumber || ""), "c1")}
+    ${card("Potvrzeno zákazníkem", esc(formatWhen(b.order.orderedAt, b.order.timeSource)), "c2")}
+    ${card("Dohodnutá konečná cena", `${formatKc(b.offer.priceKc)}<small>${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)} · ${esc(PAY_INFO[b.offer.paymentMethod]?.label || paymentLabel(b.offer.paymentMethod))}</small>`, "c3")}
+    ${partyBlock(s)}
     ${b.pending ? `<div class="alert wait">Čeká souhlas zákazníka se změnou. Jízdu zatím nespouštějte.</div><button type="button" class="btn" data-act="go" data-view="handoff">Předejte telefon znovu</button>` : `<button type="button" class="btn xl go" data-act="start-ride">Začít jízdu</button>`}
     <button type="button" class="btn ghost" data-act="go-change">Změnit trasu nebo cenu</button>
     <button type="button" class="btn ghost" data-act="go" data-view="ask-cancel">Zrušit před jízdou</button>`);
@@ -341,21 +435,20 @@ function viewReady() {
 
 function viewRiding() {
   const b = rideBy();
-  return shell("Jízda probíhá", `
-    <p class="badge go">Jízda probíhá</p>
-    <div class="price sm">${formatKc(b.offer.priceKc)}</div>
-    <p class="route">${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)}</p>
-    <p>Začátek ${esc(formatWhen(b.ride.startedAt, b.ride.timeSource))}</p>
-    <p class="clock" id="clock"></p>
+  return shell("Režim řidiče", `
+    <h1>Probíhá jízda</h1>
+    ${card("Trasa", `${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)}`, "c1")}
+    ${card("Dohodnutá konečná cena", formatKc(b.offer.priceKc), "c2")}
+    ${card("Začátek jízdy", `${esc(formatWhen(b.ride.startedAt, b.ride.timeSource))}<small class="clock" id="clock"></small>`, "c3")}
     ${b.pending ? `<div class="alert wait">Změna ještě není potvrzená. Platí původní cena ${formatKc(b.offer.priceKc)}.</div><button type="button" class="btn" data-act="go" data-view="handoff">Předejte telefon ke souhlasu</button>` : ""}
-    <button type="button" class="btn xl stop" data-act="go" data-view="end-ask">Ukončit jízdu</button>
+    <button type="button" class="btn xl" data-act="go" data-view="end-ask">Ukončit jízdu</button>
     <button type="button" class="btn ghost" data-act="go-change">Změnit trasu nebo cenu</button>`);
 }
 
 function viewEndAsk() {
-  return shell("Ukončit jízdu", `
+  return shell("Režim řidiče", `
     <h1>Opravdu ukončit jízdu?</h1>
-    <p>Po ukončení se vystaví potvrzení o přepravě. Čas ukončení je čas serveru a nejde ho přepsat.</p>
+    <p class="hint">Po ukončení se vystaví potvrzení o přepravě. Čas ukončení je čas serveru a nejde ho přepsat.</p>
     <button type="button" class="btn xl stop" data-act="end-ride">Ano, ukončit jízdu</button>
     <button type="button" class="btn ghost" data-act="go" data-view="riding">Ne, pokračovat</button>`);
 }
@@ -369,11 +462,12 @@ function viewPay() {
     qr: "QR platba se v této verzi jen zaznamená. Převod si hlídáte na účtu. Až peníze dorazí, označte platbu.",
     faktura: "Fakturu vystavíte mimo aplikaci. Až úhradu zaznamenáte, označte ji tady.",
   };
-  return shell("Platba", `
-    <p class="badge wait">ČEKÁ NA PLATBU</p>
+  return shell("Po dokončení přepravy", `
+    <h1>Úhrada jízdy</h1>
+    <p class="badge wait">Čeká na platbu</p>
     <div class="price">${formatKc(b.payment.amountKc)}</div>
-    <p style="text-align:center">${esc(paymentLabel(method))}</p>
-    <p>${texts[method] || ""}</p>
+    ${card("Způsob platby", `${esc(PAY_INFO[method]?.label || paymentLabel(method))}<small>${esc(PAY_INFO[method]?.sub || "")}</small>`, "c3")}
+    <p class="hint">${texts[method] || ""} Způsob platby je daný objednávkou a nejde ho už změnit.</p>
     <button type="button" class="btn xl" data-act="mark-paid">${method === "hotovost" ? "Hotovost převzata" : "Označit jako zaplaceno"}</button>`);
 }
 
@@ -394,15 +488,17 @@ function viewConfirm() {
   const email = emailStatusView(b.delivery);
   const paid = b.payment?.status === "paid";
   const tone = email.kind === "sent" ? "ok" : email.kind === "failed" ? "bad" : "wait";
-  return shell("Potvrzení", `
-    <p class="badge ${paid ? "ok" : "wait"}">${paid ? "ZAPLACENO" : "ČEKÁ NA PLATBU"}</p>
-    <h1>Potvrzení o přepravě</h1>
-    <dl>${view.lines.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
-    <p class="hint">Vystaveno ${esc(formatWhen(b.confirmation.createdAt, b.confirmation.timeSource))}. Záznam je neměnný.</p>
-    <div class="alert ${tone}" id="email-status">${esc(email.text)}</div>
+  const at = b.delivery?.attemptedAt ? pragueParts(b.delivery.attemptedAt).time : "";
+  return shell("Potvrzení o přepravě", `
+    <h1>Jízda dokončena</h1>
+    <p class="badge ${paid ? "ok" : "wait"}">${paid ? "Zaplaceno" : "Čeká na platbu"}</p>
+    <div class="infobox mail ${tone}" id="email-status"><div><span>${email.kind === "sent" ? "E-mail odeslán" : email.kind === "failed" ? "E-mail neodešel" : "E-mail"}${at ? ` | ${esc(at)}` : ""}</span><strong>${esc(b.confirmation.customerEmail || b.delivery?.to || "")}</strong></div>${email.kind === "sent" ? "" : `<p>${esc(email.text)}</p>`}</div>
     ${email.kind === "sent" ? "" : `<button type="button" class="btn" data-act="resend-email">Odeslat znovu</button>`}
+    <dl class="infobox">${view.lines.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+    <p class="hint">Vystaveno ${esc(formatWhen(b.confirmation.createdAt, b.confirmation.timeSource))}. Záznam je neměnný.</p>
     ${eetBlock(view.eet)}
-    <button type="button" class="btn ghost" data-act="go" data-view="home">Domů</button>`);
+    <button type="button" class="btn xl" data-act="go" data-view="home">Domů</button>
+    <button type="button" class="btn ghost" data-act="go" data-view="history">Otevřít detail / export</button>`);
 }
 
 function viewInspect() {
@@ -410,8 +506,8 @@ function viewInspect() {
   const rows = S.bundle.rides.filter((r) => r.confirmation && pragueParts(r.confirmation.createdAt).key === today);
   return shell("Pro kontrolu", `
     <h1>Dnešní potvrzení</h1>
-    <p>Potvrzení o přepravě má být u řidiče k nahlédnutí po zbytek dne.</p>
-    ${rows.length ? rows.map((r) => `<button type="button" class="card-btn" data-act="open-ride" data-id="${r.ride.id}"><strong>${esc(r.confirmation.evidencniCislo)}</strong><span>${esc(r.offer.fromPlace)} → ${esc(r.offer.toPlace)}</span><span>${formatKc(r.offer.priceKc)}</span></button>`).join("") : `<p class="empty">Dnes není žádné potvrzení k předložení.</p>`}
+    <p class="hint">Potvrzení o přepravě má být u řidiče k nahlédnutí po zbytek dne.</p>
+    ${rows.length ? rows.map((r) => `<button type="button" class="card-btn c1" data-act="open-ride" data-id="${r.ride.id}"><span class="lbl">Evidenční číslo</span><strong>${esc(r.confirmation.evidencniCislo)}</strong><span>${esc(r.offer.fromPlace)} → ${esc(r.offer.toPlace)}</span><span class="accent">${formatKc(r.offer.priceKc)}</span></button>`).join("") : `<p class="empty">Dnes není žádné potvrzení k předložení.</p>`}
     <button type="button" class="btn ghost" data-act="go" data-view="home">Domů</button>`);
 }
 
@@ -419,16 +515,16 @@ function viewHistory() {
   const month = S.draft.historyMonth || pragueParts(new Date().toISOString()).key.slice(0, 7);
   const rows = S.bundle.rides.filter((r) => r.confirmation && pragueParts(r.confirmation.createdAt).key.startsWith(month));
   const sums = paymentSums(rows);
-  return shell("Historie", `
+  return shell("Režim řidiče", `
     <h1>Historie jízd</h1>
     <label>Měsíc<input type="month" data-field="historyMonth" value="${esc(month)}"></label>
-    <div class="sum">
-      <div>Hotovost ${formatKc(sums.hotovost || 0)}</div>
-      <div>Karta ${formatKc(sums.karta || 0)}</div>
-      <div>QR ${formatKc(sums.qr || 0)}</div>
-      <div>Faktura ${formatKc(sums.faktura || 0)}</div>
-      <div><strong>Z toho zaplaceno ${formatKc(sums.paid || 0)}</strong></div>
+    <div class="sumgrid">
+      ${card("Hotovost", formatKc(sums.hotovost || 0), "c1")}
+      ${card("Karta", formatKc(sums.karta || 0), "c2")}
+      ${card("QR", formatKc(sums.qr || 0), "c3")}
+      ${card("Faktura", formatKc(sums.faktura || 0), "c1")}
     </div>
+    ${card("Z toho zaplaceno", formatKc(sums.paid || 0), "c2")}
     ${rows.length ? rows.map(rideCard).join("") : `<p class="empty">V tomto měsíci není žádné potvrzení.</p>`}
     <button type="button" class="btn" data-act="export-csv">Export CSV</button>
     <p class="hint">Soubor je oddělený středníkem, aby ho otevřel český Excel. Potvrzení se nemažou, uchování je nejméně 3 roky.</p>
@@ -449,13 +545,16 @@ function viewProfile() {
     });
   }
   const eetOn = S.draft.eetEnabled === true;
-  return shell("Profil", `
+  return shell("Režim řidiče", `
     <h1>Můj profil</h1>
-    <p>IČO <strong>${esc(b.carrier.ico)}</strong> · ${esc(STATUS_CARRIER[b.carrier.status] || "")}</p>
+    ${card("IČO", esc(b.carrier.ico), "c1")}
+    ${card("Stav registrace", esc(STATUS_CARRIER[b.carrier.status] || ""), "c3")}
     <p class="hint">Úpravy profilu nemění už uložené nabídky a potvrzení. Ty zůstávají, jak je zákazník viděl.</p>
+    <h2>Údaje dopravce</h2>
     ${field("Jméno nebo firma", "name")}${field("DIČ", "dic")}${field("Plátce DPH", "vatPayer", { type: "checkbox" })}
     ${field("Ulice", "street")}<div class="row2">${field("PSČ", "zip")}${field("Město", "city")}</div>
     ${field("IBAN", "iban")}${field("E-mail", "email", { type: "email" })}${field("Telefon", "phone")}
+    <h2>Řidič a vozidlo</h2>
     <div class="row2">${field("Jméno řidiče", "firstName")}${field("Příjmení", "lastName")}</div>
     ${field("Oprávnění řidiče taxislužby", "licenceNumber")}${field("Platnost", "licenceUntil", { type: "date" })}
     ${field("RZ", "rz")}<div class="row2">${field("Značka", "make")}${field("Model", "model")}</div>
@@ -466,7 +565,7 @@ function viewProfile() {
     <h2>Evidence tržeb (EET 2.0)</h2>
     <label class="consent"><input type="checkbox" data-field="eetEnabled" ${eetOn ? "checked" : ""}><span>Zapnout evidenci tržeb</span></label>
     ${eetOn ? `
-      <p>Vyplňte svoje údaje z DIS+. Dokud evidenci nezapnete, v jízdě, platbě ani v e-mailu se neobjeví. Zapnutí nic neblokuje.</p>
+      <p class="hint">Vyplňte svoje údaje z DIS+. Dokud evidenci nezapnete, v jízdě, platbě ani v e-mailu se neobjeví. Zapnutí nic neblokuje.</p>
       <div class="alert wait">Napojení na Finanční správu je zatím jen příprava. Zpráva se nikam neodesílá, vznikne jen zkušební kód nebo záznam ve frontě.</div>
       ${field("DIČ / EIČ", "dicEic")}${field("Evidenční jednotka (vozidlo)", "evidencniJednotka")}${field("Označení pokladního zařízení", "zarizeni")}
       <label>Certifikát .p12<input id="cert-file" type="file" accept=".p12,application/x-pkcs12"></label>
@@ -475,7 +574,7 @@ function viewProfile() {
       <label class="consent"><input type="checkbox" data-field="simulateOffline" ${S.draft.simulateOffline ? "checked" : ""}><span>Zkouška offline fronty (nevracet kód, jen zařadit)</span></label>
       <button type="button" class="btn" data-act="save-eet">Uložit nastavení EET</button>
       ${queuedEet() ? `<button type="button" class="btn ghost" data-act="flush-eet">Odeslat čekající EET (zkušební)</button>` : ""}
-    ` : `<p>Evidence je vypnutá. Jízdy, platby ani e-maily ji nepoužívají. Až budete mít údaje z DIS+ a pokladní certifikát, zapněte ji tady.</p>`}
+    ` : `<p class="hint">Evidence je vypnutá. Jízdy, platby ani e-maily ji nepoužívají. Až budete mít údaje z DIS+ a pokladní certifikát, zapněte ji tady.</p>`}
     ${S.backend.mode === "demo" ? `<button type="button" class="btn ghost" data-act="go" data-view="reset-ask">Smazat demo data v tomto prohlížeči</button>` : ""}
     <button type="button" class="btn ghost" data-act="go" data-view="home">Domů</button>`);
 }
@@ -483,22 +582,23 @@ function viewProfile() {
 function viewChange() {
   const b = rideBy();
   const method = S.draft.paymentMethod || b.offer.paymentMethod;
-  return shell("Změna", `
+  return shell("Změna nabídky", `
     <h1>Změnit trasu nebo cenu</h1>
-    <p>Původní objednávka zůstane uložená. Nová cena začne platit, až ji zákazník znovu objedná.</p>
     <p class="old">Teď platí ${formatKc(b.offer.priceKc)} · ${esc(b.offer.fromPlace)} → ${esc(b.offer.toPlace)}</p>
-    <label>Odkud<input data-field="from" value="${esc(S.draft.from || b.offer.fromPlace)}"></label>
-    <label>Kam<input data-field="to" value="${esc(S.draft.to || b.offer.toPlace)}"></label>
-    <label>Nová konečná cena v Kč<input class="price-in" data-field="priceKc" inputmode="numeric" value="${esc(S.draft.priceKc || b.offer.priceKc)}"></label>
-    <label>Způsob platby<select data-field="paymentMethod">${PAYMENT_METHODS.map((p) => `<option value="${p.id}" ${method === p.id ? "selected" : ""}>${p.label}</option>`).join("")}</select></label>
-    <button type="button" class="btn xl" data-act="save-change">Předejte telefon ke souhlasu</button>
+    <label class="card c1 incard"><span class="lbl">Odkud</span><input data-field="from" value="${esc(S.draft.from || b.offer.fromPlace)}"></label>
+    <label class="card c2 incard"><span class="lbl">Kam</span><input data-field="to" value="${esc(S.draft.to || b.offer.toPlace)}"></label>
+    <label class="card c3 incard"><span class="lbl">Nová konečná cena v Kč</span><input class="price-in" data-field="priceKc" inputmode="numeric" value="${esc(S.draft.priceKc || b.offer.priceKc)}"></label>
+    <h2>Způsob platby</h2>
+    ${payOptions(method)}
+    <p class="hint">Původní objednávka zůstane uložená. Nová cena začne platit, až ji zákazník znovu objedná.</p>
+    <button type="button" class="btn xl" data-act="save-change">Předat zákazníkovi ke souhlasu</button>
     <button type="button" class="btn ghost" data-act="open-ride" data-id="${b.ride.id}">Zpět</button>`);
 }
 
 function viewAskCancel() {
-  return shell("Zrušit", `
+  return shell("Režim řidiče", `
     <h1>Opravdu zrušit?</h1>
-    <p>Jízda ještě nezačala. Záznam zrušení zůstane, nesmaže se.</p>
+    <p class="hint">Jízda ještě nezačala. Záznam zrušení zůstane, nesmaže se.</p>
     <button type="button" class="btn xl stop" data-act="cancel-ride">Ano, zrušit</button>
     <button type="button" class="btn ghost" data-act="open-ride" data-id="${S.rideId}">Ne</button>`);
 }
@@ -506,20 +606,20 @@ function viewAskCancel() {
 function viewReset() {
   return shell("Demo data", `
     <h1>Smazat demo data?</h1>
-    <p>Smaže se jen obsah tohoto prohlížeče. Na žádný server se nic neposlalo.</p>
+    <p class="hint">Smaže se jen obsah tohoto prohlížeče. Na žádný server se nic neposlalo.</p>
     <button type="button" class="btn xl stop" data-act="reset-demo">Ano, smazat demo</button>
     <button type="button" class="btn ghost" data-act="go" data-view="profile">Ne</button>`);
 }
 
 function viewAdmin() {
   const a = S.bundle.admin;
-  return shell("Správce", `
+  return shell("Režim správce", `
     <h1>Správce platformy</h1>
-    <p>Vidíte všechny dopravce. Každý řidič ve své aplikaci vidí jen svoje jízdy.</p>
+    <p class="hint">Vidíte všechny dopravce. Každý řidič ve své aplikaci vidí jen svoje jízdy.</p>
     <h2>Registrace</h2>
-    ${a.carriers.length ? a.carriers.map((c) => `<div class="card-btn" style="cursor:default">
+    ${a.carriers.length ? a.carriers.map((c) => `<div class="card-btn c3" style="cursor:default">
       <strong>${esc(c.name)}</strong>
-      <span>IČO ${esc(c.ico)} · ${esc(STATUS_CARRIER[c.status] || c.status)}</span>
+      <span>IČO ${esc(c.ico)} · <span class="accent">${esc(STATUS_CARRIER[c.status] || c.status)}</span></span>
       <span>${esc(c.driver ? `${c.driver.firstName} ${c.driver.lastName}` : "")} · ${esc(c.vehicle?.rz || "")}</span>
       <span>EET: ${c.eet?.enabled ? "zapnuto" : "vypnuto"}</span>
       ${c.status !== "active" ? `<button type="button" class="btn" data-act="set-status" data-id="${c.id}" data-status="active">Schválit</button>` : ""}
@@ -536,9 +636,9 @@ function viewAdmin() {
 }
 
 function render() {
-  document.body.classList.toggle("night", S.night);
+  document.body.classList.toggle("light", !S.night);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", S.night ? "#000000" : "#111111");
+  if (meta) meta.setAttribute("content", S.night ? "#07070c" : "#f4f5fb");
   const view = viewNow();
   const screens = {
     boot: () => shell("Načítání", "<h1>Načítám…</h1>"),
@@ -547,6 +647,8 @@ function render() {
     register: viewRegister,
     home: viewHome,
     offer: viewOffer,
+    quick: viewQuick,
+    price: viewPrice,
     handoff: viewHandoff,
     customer: viewCustomer,
     order: viewOrder,
@@ -619,7 +721,7 @@ async function run(act, el) {
 const actions = {
   async "toggle-night"() {
     S.night = !S.night;
-    localStorage.setItem("svezemete.night", S.night ? "1" : "0");
+    localStorage.setItem("svezemete.theme", S.night ? "dark" : "light");
     render();
   },
   async go(el) {
@@ -636,8 +738,33 @@ const actions = {
     if (S.backend.mode !== "demo" && S.bundle?.carrier?.status !== "active") {
       throw new Error("Účet čeká na ověření. Jízdu založíte až po schválení správcem.");
     }
-    S.draft = { paymentMethod: "hotovost" };
+    S.draft = { paymentMethod: "hotovost", from: S.view === "quick" ? (S.draft.from || "") : "" };
     go("offer");
+  },
+  async "go-quick"() {
+    if (S.backend.mode !== "demo" && S.bundle?.carrier?.status !== "active") {
+      throw new Error("Účet čeká na ověření. Jízdu založíte až po schválení správcem.");
+    }
+    S.draft = { paymentMethod: "hotovost", from: lastStart() };
+    go("quick");
+  },
+  async "pick-fav"(el) {
+    const f = favouriteRoutes()[Number(el.dataset.i)];
+    if (!f) return;
+    // Nástup z obrazovky (pokud ho řidič upravil) má přednost před uloženou trasou.
+    const from = String(S.draft.from || "").trim();
+    S.draft = { from: from || f.from, to: f.to, priceKc: String(f.price), paymentMethod: f.method || "hotovost" };
+    go("price");
+  },
+  async "quick-other"() {
+    S.draft = { from: S.draft.from || "", to: "", priceKc: "", paymentMethod: S.draft.paymentMethod || "hotovost" };
+    go("price");
+    const el = document.querySelector('[data-field="from"]')?.value ? document.querySelector('[data-field="to"]') : document.querySelector('[data-field="from"]');
+    el?.focus();
+  },
+  async "pick-pay"(el) {
+    S.draft.paymentMethod = el.dataset.method;
+    render();
   },
   async "go-change"() { S.draft = {}; go("change"); },
   async "fill-demo"() {
@@ -1221,7 +1348,7 @@ function bind() {
 
 async function boot() {
   bind();
-  document.body.classList.toggle("night", S.night);
+  document.body.classList.toggle("light", !S.night);
   const hasServer = configured();
   if (!hasServer && !demoAllowed()) {
     S.backend = null;
