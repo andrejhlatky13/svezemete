@@ -279,3 +279,37 @@ dl { margin: 0; }
 .terms-box h2 { margin: 16px 0 8px; font-size: 21px; }
 .terms-box h2:first-child { margin-top: 4px; }
 .terms-box p { margin: 0 0 10px; font-size: 20px; color: var(--ink); line-height: 1.45; }
+
+/* Obchodní podmínky v2.1: části, články, uložení, odkaz v patičce */
+.sec { margin: 22px 0 6px; font-size: 24px; }
+.termshead { margin: 8px 0 4px; }
+.termshead .termsver { margin: 0 0 2px; font-size: 22px; }
+.termsmeta { margin: 0; font-size: 18px; font-weight: 700; color: var(--muted); }
+.termsmeta span { color: var(--line); margin: 0 6px; }
+.terms-box { max-height: 420px; }
+.terms-box .tpart, .terms .tpart {
+  margin: 22px 0 10px; padding: 8px 12px; border-radius: 12px; font-size: 21px; line-height: 1.3;
+  background: var(--panel2); color: var(--cyan); border-left: 6px solid var(--violet);
+}
+.terms-box .tpart:first-child, .terms .tpart:first-child { margin-top: 4px; }
+.terms-box h3, .terms h3 { margin: 16px 0 6px; font-size: 21px; color: var(--ink); }
+.terms p { font-size: 20px; line-height: 1.5; margin: 0 0 10px; }
+.terms-box .tnote, .terms .tnote { font-size: 18px; color: var(--muted); font-style: italic; border-top: 1px dashed var(--line); padding-top: 8px; }
+.termssave {
+  display: grid; grid-template-columns: 132px 1fr; gap: 14px; align-items: center;
+  margin: 14px 0; padding: 12px; border-radius: 16px; border: 2px solid var(--line); background: var(--panel);
+}
+.termssave img { width: 132px; height: 132px; border-radius: 10px; background: #fff; padding: 6px; }
+.termssave strong { display: block; font-size: 20px; margin-bottom: 4px; }
+.termssave span { display: block; font-size: 17px; color: var(--muted); line-height: 1.35; }
+.termssave .url { margin-top: 6px; color: var(--cyan); font-weight: 700; word-break: break-all; }
+.privacy { margin: 10px 0 16px; border: 2px solid var(--line); border-radius: 16px; background: var(--panel); }
+.privacy summary { min-height: 60px; padding: 16px; font-size: 20px; font-weight: 800; cursor: pointer; }
+.privacy h3 { margin: 6px 16px 4px; font-size: 20px; }
+.privacy p { margin: 0 16px 12px; font-size: 19px; line-height: 1.45; }
+.paynote {
+  margin: 14px 0 6px; padding: 12px 14px; border-radius: 14px; font-size: 20px; font-weight: 800;
+  background: var(--waitbg); color: var(--wait); border: 2px solid var(--waitline);
+}
+.foot-links { margin: 22px 0 8px; text-align: center; }
+.foot-links a { display: inline-block; min-height: 48px; padding: 12px 8px; font-size: 20px; font-weight: 800; color: var(--cyan); }

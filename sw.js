@@ -1,5 +1,5 @@
 /* Service worker. Všechny cesty jsou relativní ke skriptu, takže platí i v podsložce (např. /svezemete/). */
-const CACHE = "svezemete-v7";
+const CACHE = "svezemete-v8";
 const SCOPE_URL = new URL("./", self.location.href);
 const ASSETS = [
   "./index.html",
@@ -15,6 +15,8 @@ const ASSETS = [
   "./js/app.js",
   "./js/engine.js",
   "./js/terms.js",
+  "./podminky.html",
+  "./qr-podminky.png",
 ].map((path) => new URL(path, self.location.href).href);
 
 self.addEventListener("install", (event) => {
