@@ -1,5 +1,5 @@
 /* Service worker. Všechny cesty jsou relativní ke skriptu, takže platí i v podsložce (např. /svezemete/). */
-const CACHE = "svezemete-v8";
+const CACHE = "svezemete-v9";
 const SCOPE_URL = new URL("./", self.location.href);
 const ASSETS = [
   "./index.html",
