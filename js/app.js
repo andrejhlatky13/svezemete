@@ -1285,7 +1285,7 @@ function remoteBackend() {
     async load() { if (session) await pull(); return makeBundle(cache, session, "remote", terms); },
     async register(input) {
       const email = String(input.loginEmail || input.email).trim().toLowerCase();
-      const { data, error } = await sb.auth.signUp({ email, password: input.password, options: { data: { name: input.name } } });
+      const { data, error } = await sb.auth.signUp({ email, password: input.password, options: { data: { name: input.name }, emailRedirectTo: new URL('./', location.href).href.split('#')[0].split('?')[0] } });
       if (error) throw new Error(friendly(error));
       if (!data.session) {
         const pending = { ...input };
