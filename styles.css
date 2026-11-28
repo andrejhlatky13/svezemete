@@ -209,9 +209,15 @@ input.light-in { background: #fff; color: #0b0b14; border-color: #fff; }
 dl { margin: 0; }
 
 /* Souhlasy */
-.consent { display: flex; gap: 14px; align-items: flex-start; border: 2px solid var(--line); border-radius: 16px; padding: 14px;
-  margin-top: 12px; background: var(--panel); font-weight: 750; font-size: 19px; cursor: pointer; }
-.consent input { width: 34px; height: 34px; min-height: 34px; margin: 2px 0 0; flex: none; accent-color: #7c3aed; }
+.consent {
+  display: grid; grid-template-columns: 34px 1fr; column-gap: 14px; row-gap: 8px; align-items: start;
+  border: 2px solid var(--line); border-radius: 16px; padding: 14px;
+  margin-top: 12px; background: var(--panel); font-weight: 750; font-size: 19px; cursor: pointer;
+}
+.consent input { width: 34px; height: 34px; min-height: 34px; margin: 2px 0 0; accent-color: #7c3aed; }
+.consent span { min-width: 0; }
+.consent .field-error { grid-column: 1 / -1; width: 100%; margin: 0; }
+.date-hint { display: block; margin: 6px 0 0; font-size: 17px; font-weight: 700; }
 
 /* Volba platby */
 .paylist { display: grid; gap: 10px; margin: 8px 0; }
