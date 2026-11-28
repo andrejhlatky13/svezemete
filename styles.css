@@ -79,11 +79,11 @@ header {
 .tools { display: flex; gap: 6px; justify-content: flex-end; flex: none; }
 .tool {
   background: var(--panel); color: var(--ink); border: 2px solid var(--line);
-  border-radius: 14px; min-height: 48px; min-width: 44px; padding: 6px 10px; font-weight: 800; font-size: 16px; cursor: pointer;
+  border-radius: 14px; min-height: 52px; min-width: 52px; padding: 8px 14px; font-weight: 800; font-size: 18px; cursor: pointer;
 }
 .tool.theme-toggle {
   display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px;
-  min-height: 48px; min-width: 44px; padding: 8px 12px; font-size: 17px; line-height: 1.15; white-space: nowrap;
+  min-height: 52px; min-width: 52px; padding: 8px 14px; font-size: 18px; line-height: 1.15; white-space: nowrap;
 }
 .theme-icon { width: 22px; height: 22px; flex: none; display: block; }
 @media (max-width: 360px) { .nm { font-size: 22px; } .mark { width: 42px; height: 42px; font-size: 24px; } }
@@ -183,8 +183,8 @@ input.light-in { background: #fff; color: #0b0b14; border-color: #fff; }
 .pricemeta span, .termslink span { color: var(--line); margin: 0 6px; }
 .termslink { text-align: left; color: var(--cyan); }
 .route { font-size: 26px; font-weight: 850; text-align: center; margin: 6px 0; }
-.rz { display: inline-block; font-size: 24px; font-weight: 900; letter-spacing: 1px; background: #fff; color: #111;
-  border: 3px solid #1d4ed8; border-radius: 10px; padding: 2px 10px; }
+.rz { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; font-size: 26px; font-weight: 900; letter-spacing: 1px; background: #fff; color: #111;
+  border: 3px solid #1d4ed8; border-radius: 10px; padding: 4px 12px; }
 .hello { font-size: 26px; font-weight: 800; }
 .hint, .old { color: var(--muted); font-size: 19px; }
 .old { font-weight: 700; }
@@ -251,6 +251,23 @@ dl { margin: 0; }
 .dots { display: flex; gap: 16px; justify-content: center; margin: 18px 0; }
 .dots span { width: 24px; height: 24px; border-radius: 50%; border: 3px solid var(--violet); background: transparent; }
 .dots span.on { background: var(--grad-soft); border-color: transparent; }
+.dots.shake { animation: pinshake 0.45s ease-in-out; }
+@keyframes pinshake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-10px); }
+  40% { transform: translateX(10px); }
+  60% { transform: translateX(-7px); }
+  80% { transform: translateX(7px); }
+}
+.btn-busy { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 10px; }
+.btn.is-busy { flex-direction: row; }
+.spin {
+  width: 22px; height: 22px; flex: none; border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.35); border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+.btn.ghost .spin, .btn.dark .spin, .tool .spin { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .key { margin: 0; min-height: 76px; font-size: 34px; background: var(--panel); color: var(--ink); border: 2px solid var(--line); box-shadow: none; text-shadow: none; }
 
@@ -291,7 +308,7 @@ dl { margin: 0; }
 /* Obchodní podmínky přímo na souhlasu objednávky */
 .termsver { margin: 16px 0 8px; font-weight: 800; color: var(--cyan); }
 .terms-box {
-  max-height: 320px; overflow: auto; -webkit-overflow-scrolling: touch;
+  max-height: 40vh; overflow: auto; -webkit-overflow-scrolling: touch;
   border: 2px solid var(--line); border-radius: 16px; padding: 12px 16px; margin: 8px 0 14px;
   background: var(--panel);
 }
@@ -305,7 +322,6 @@ dl { margin: 0; }
 .termshead .termsver { margin: 0 0 2px; font-size: 22px; }
 .termsmeta { margin: 0; font-size: 18px; font-weight: 700; color: var(--muted); }
 .termsmeta span { color: var(--line); margin: 0 6px; }
-.terms-box { max-height: 420px; }
 .terms-box .tpart, .terms .tpart {
   margin: 22px 0 10px; padding: 8px 12px; border-radius: 12px; font-size: 21px; line-height: 1.3;
   background: var(--panel2); color: var(--cyan); border-left: 6px solid var(--violet);
