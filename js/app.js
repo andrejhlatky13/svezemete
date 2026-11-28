@@ -10,6 +10,63 @@ import {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const $ = (id) => document.getElementById(id);
+
+const BUSY_TEXT = {
+  login: "Přihlašuji…",
+  "forgot-send": "Odesílám odkaz…",
+  "set-new-password": "Ukládám heslo…",
+  "reg-submit": "Odesílám…",
+  "reg-next": "Pokračuji…",
+  ares: "Načítám z ARES…",
+  "create-offer": "Ukládám nabídku…",
+  "to-customer": "Otevírám…",
+  "place-order": "Ukládám objednávku…",
+  "start-ride": "Zahajuji jízdu…",
+  "end-ride": "Ukončuji jízdu…",
+  "mark-paid": "Ukládám platbu…",
+  "resend-email": "Odesílám e-mail…",
+  "cancel-ride": "Ruším…",
+  "save-change": "Ukládám změnu…",
+  "discard-change": "Ruším změnu…",
+  "save-profile": "Ukládám…",
+  "save-pin": "Ukládám PIN…",
+  "save-first-pin": "Ukládám…",
+  "save-eet": "Ukládám…",
+  "flush-eet": "Odesílám…",
+  "export-csv": "Připravuji soubor…",
+  "set-status": "Ukládám…",
+  "retry-pending": "Dokončuji registraci…",
+  "retry-boot": "Načítám…",
+  logout: "Odhlašuji…",
+  "open-ride": "Otevírám…",
+  "go-quick": "Připravuji…",
+  "check-pin": "Ověřuji PIN…",
+};
+
+function busyText(act) {
+  return BUSY_TEXT[act] || "Ukládám…";
+}
+
+function spinLabel(text) {
+  return `<span class="btn-busy"><span class="spin" aria-hidden="true"></span><span>${esc(text)}</span></span>`;
+}
+
+function showBusy(el, act) {
+  const root = $("app");
+  if (!root) return;
+  root.querySelectorAll("button").forEach((btn) => {
+    const a = btn.dataset.act;
+    if (a === "toggle-night") return;
+    btn.disabled = true;
+  });
+  let target = el && el.tagName === "FORM" ? el.querySelector("button[type=submit], button.btn") : el;
+  if (target && target.tagName === "BUTTON" && target.dataset.act !== "pin-key") {
+    target.disabled = true;
+    target.classList.add("is-busy");
+    target.setAttribute("aria-busy", "true");
+    target.innerHTML = spinLabel(busyText(act));
+  }
+}
 const SAMPLE = {
   name: "Jan Novák", ico: "12345679", dic: "CZ12345679", vatPayer: false,
   street: "Dlouhá 12", city: "Praha 1", zip: "110 00", iban: "CZ6508000000192000145399",
@@ -34,6 +91,8 @@ const S = {
   pinTries: 0,
   pinLockedUntil: 0,
   busy: false,
+  busyAct: "",
+  pinShake: false,
   bundle: null,
   backend: null,
   regStep: 1,
@@ -278,8 +337,7 @@ function shell(mode, body, wide) {
     ${S.backend?.mode === "demo" ? `<div class="banner">DEMO REŽIM. Data zůstávají jen v tomto prohlížeči. E-mail se neodesílá a čas objednávky je simulace času serveru.</div>` : ""}
     <main>
       <p class="mode">${esc(mode)}</p>
-      ${S.error ? `<div class="alert bad" role="alert">${esc(S.error)}</div>` : ""}
-      ${S.info ? `<div class="alert ok" role="status">${esc(S.info)}</div>` : ""}
+      ${S.error ? `<div class="alert bad" role="alert">${esc(S.error)}</div>` : S.info ? `<div class="alert ok" role="status">${esc(S.info)}</div>` : ""}
       ${body}
     </main>
   </div>`;
@@ -617,7 +675,7 @@ function kontrolRow(label, value) {
 }
 
 // Kompaktní přehled pro kontrolu objednávky (čas, dopravce, trasa, cena).
-function kontrolBox(b, phase) {
+function kontrolBox(b, phase, full) {
   const offer = acceptedOffer(b) || b.offer;
   if (!offer) return "";
   const s = offer.snapshot || {};
@@ -632,8 +690,11 @@ function kontrolBox(b, phase) {
     ${ordered && b.order.orderNumber ? kontrolRow("Číslo objednávky", esc(b.order.orderNumber)) : ""}
     ${kontrolRow("Dopravce", esc(s.carrierName || ""))}
     ${kontrolRow("IČO", esc(s.ico || ""))}
+    ${full ? kontrolRow("Sídlo", esc(s.sidlo || "")) : ""}
     ${kontrolRow("Řidič", esc(s.driverName || ""))}
+    ${full ? kontrolRow("Vozidlo", esc([s.make, s.model].filter(Boolean).join(" "))) : ""}
     ${kontrolRow("SPZ vozidla", s.rz ? `<span class="rz">${esc(s.rz)}</span>` : "")}
+    ${full && (s.email || s.phone) ? kontrolRow("Kontakt a reklamace", esc([s.email, s.phone].filter(Boolean).join(", "))) : ""}
     ${kontrolRow("Trasa", `${esc(offer.fromPlace || "")} → ${esc(offer.toPlace || "")}`)}
     ${kontrolRow("Dohodnutá konečná cena", formatKc(offer.priceKc))}
     ${kontrolRow("Způsob platby", esc(pay || ""))}
@@ -687,14 +748,12 @@ function termsInline() {
 function viewCustomer() {
   const b = rideBy();
   const offer = acceptedOffer(b);
-  const s = offer.snapshot;
   return shell("Režim zákazníka", `
     <h1>Vaše jízda</h1>
     <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
     <div class="price">${formatKc(offer.priceKc)}</div>
     <p class="pricemeta">Konečná cena <span>|</span> ${esc(PAY_INFO[offer.paymentMethod]?.label || paymentLabel(offer.paymentMethod))}</p>
-    ${partyBlock(s)}
-    ${kontrolBox(b, "offer")}
+    ${kontrolBox(b, "offer", true)}
     ${offer.version > 1 ? `<div class="alert wait">Toto je změna oproti původní objednávce. Bez vašeho souhlasu platí původní cena a trasa.</div>` : ""}
     <button type="button" class="btn xl" data-act="go" data-view="order">Pokračovat k objednávce</button>
     <button type="button" class="btn ghost" data-act="show-terms" data-back="customer">Celý text podmínek a údajů</button>
@@ -705,21 +764,24 @@ function viewOrder() {
   const b = rideBy();
   const offer = acceptedOffer(b);
   const ready = S.draft.consentTerms === true && S.draft.consentPrice === true && validEmail(S.draft.email);
+  const ordering = S.busy && S.busyAct === "place-order";
+  const orderLabel = `Objednávám jízdu za ${formatKc(offer.priceKc)}`;
   return shell("Potvrzení objednávky", `
     <h1>Objednávka jízdy</h1>
     <p class="route">${esc(offer.fromPlace)} → ${esc(offer.toPlace)}</p>
     <div class="price sm">${formatKc(offer.priceKc)}</div>
-    ${kontrolBox(b, "offer")}
+    ${kontrolBox(b, "offer", true)}
     <form data-act="place-order" autocomplete="off">
       <label>E-mail pro potvrzení<input class="light-in" type="email" data-field="email" inputmode="email" autocomplete="email" value="${esc(S.draft.email || "")}" placeholder="vas@email.cz"></label>
       <p class="hint">E-mail si zkontrolujte. Po objednání už nejde přepsat.</p>
-      ${termsInline()}
       <label class="consent"><input type="checkbox" data-field="consentTerms" ${S.draft.consentTerms ? "checked" : ""}><span>Souhlasím s obchodními podmínkami</span></label>
       <label class="consent"><input type="checkbox" data-field="consentPrice" ${S.draft.consentPrice ? "checked" : ""}><span>Souhlasím se smluvní cenou a danou trasou přepravy</span></label>
       <p class="paynote">Klepnutím na tlačítko objednáváte placenou přepravu. Vzniká vám povinnost zaplatit konečnou cenu ${formatKc(offer.priceKc)}.</p>
       <p class="hint" id="order-need">${ready ? "" : "Tlačítko se zpřístupní po vyplnění e-mailu a zaškrtnutí obou souhlasů."}</p>
-      <button class="btn xl" id="order-btn" type="submit" ${ready ? "" : "disabled"}>Objednávám jízdu za ${formatKc(offer.priceKc)}</button>
+      <button class="btn xl" id="order-btn" type="submit" ${ready && !S.busy ? "" : "disabled"}>${ordering ? spinLabel("Ukládám objednávku…") : orderLabel}</button>
     </form>
+    <p class="hint">Celé obchodní podmínky si před souhlasem přečtěte v rámečku níže, nebo je otevřete na celé obrazovce.</p>
+    ${termsInline()}
     <button type="button" class="btn ghost" data-act="go" data-view="customer">Zpět na kontrolu</button>
     <p class="hint">Objednávka se uloží s časem serveru ještě před zahájením jízdy. Bez ní jízdu nelze zahájit.</p>`);
 }
@@ -738,11 +800,12 @@ function viewTerms() {
 function viewPin() {
   const n = (S.draft.pin || "").length;
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"];
+  const checking = S.busy && S.busyAct === "check-pin";
   return shell("PIN řidiče", `
     <h1>Zpět pro řidiče</h1>
-    <p class="hint">Pro návrat do režimu řidiče zadejte čtyřmístný PIN.</p>
-    <div class="dots" aria-label="Zadané číslice">${[0, 1, 2, 3].map((i) => `<span class="${i < n ? "on" : ""}"></span>`).join("")}</div>
-    <div class="pad">${keys.map((k) => k === "" ? "<span></span>" : `<button type="button" class="key" data-act="pin-key" data-key="${k === "⌫" ? "del" : k}" aria-label="${k === "⌫" ? "Smazat" : k}">${k}</button>`).join("")}</div>`);
+    <p class="hint">${checking ? "Ověřuji PIN…" : "Pro návrat do režimu řidiče zadejte čtyřmístný PIN."}</p>
+    <div class="dots${S.pinShake ? " shake" : ""}" aria-label="Zadané číslice">${[0, 1, 2, 3].map((i) => `<span class="${i < n ? "on" : ""}"></span>`).join("")}</div>
+    <div class="pad">${keys.map((k) => k === "" ? "<span></span>" : `<button type="button" class="key" data-act="pin-key" data-key="${k === "⌫" ? "del" : k}" aria-label="${k === "⌫" ? "Smazat" : k}" ${checking ? "disabled" : ""}>${k}</button>`).join("")}</div>`);
 }
 
 function viewReady() {
@@ -1061,8 +1124,11 @@ async function run(act, el) {
   if (lock) S.error = "";
   if (lock && act !== "ares") S.info = "";
   if (lock && !["reg-next", "reg-submit"].includes(act)) S.fieldErrors = {};
-  if (lock) S.busy = true;
-  if (act === "reg-submit" || act === "save-first-pin" || act === "retry-pending") render();
+  if (lock) {
+    S.busy = true;
+    S.busyAct = act;
+    showBusy(el, act);
+  }
   try {
     await actions[act]?.(el);
   } catch (err) {
@@ -1072,7 +1138,9 @@ async function run(act, el) {
   } finally {
     if (lock) {
       S.busy = false;
-      if (["register", "set-pin", "finishing", "incomplete"].includes(S.view)) render();
+      S.busyAct = "";
+      const stillHere = el && document.body.contains(el);
+      if (stillHere || ["register", "set-pin", "finishing", "incomplete", "login", "order", "pin"].includes(S.view)) render();
     }
   }
 }
@@ -1290,11 +1358,14 @@ const actions = {
     go("pin");
   },
   async "pin-key"(el) {
+    if (S.busy) return;
     const key = el.dataset.key;
     let pin = S.draft.pin || "";
     if (key === "del") pin = pin.slice(0, -1);
     else if (pin.length < 4) pin += key;
     S.draft.pin = pin;
+    S.pinShake = false;
+    if (pin) S.info = "";
     render();
     if (S.draft.pin.length === 4) await submitPin();
   },
@@ -1403,14 +1474,28 @@ const actions = {
 async function submitPin() {
   if (Date.now() < S.pinLockedUntil) {
     S.draft.pin = "";
+    S.info = "";
+    S.pinShake = true;
     S.error = "Příliš mnoho pokusů. Počkejte půl minuty.";
     render();
     return;
   }
-  const ok = await S.backend.checkPin(S.draft.pin);
+  S.busy = true;
+  S.busyAct = "check-pin";
+  S.info = "";
+  render();
+  let ok = false;
+  try {
+    ok = await S.backend.checkPin(S.draft.pin);
+  } finally {
+    S.busy = false;
+    S.busyAct = "";
+  }
   if (!ok) {
     S.pinTries += 1;
     S.draft.pin = "";
+    S.info = "";
+    S.pinShake = true;
     S.error = S.pinTries >= 5 ? "Pětkrát špatný PIN. Počkejte 30 sekund." : "Špatný PIN.";
     if (S.pinTries >= 5) { S.pinLockedUntil = Date.now() + 30000; S.pinTries = 0; }
     render();
@@ -1418,6 +1503,7 @@ async function submitPin() {
   }
   S.customerLock = false;
   S.pinTries = 0;
+  S.pinShake = false;
   S.draft.pin = "";
   S.error = "";
   S.info = "";
