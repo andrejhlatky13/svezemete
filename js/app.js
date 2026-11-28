@@ -1,7 +1,8 @@
 import { TERMS_PARAS, PRIVACY_PARAS, TERMS_VERSION, TERMS_VERSIONS, TERMS_PAGE, termsLabel, termsHtml } from "./terms.js";
 import {
   PAYMENT_METHODS, RIDE_LABEL, STATUS_CARRIER, paymentLabel, formatKc, formatWhen, pragueParts,
-  validEmail, validIco, registrationFieldErrors, createEmptyDb, rehydrate, registerDriver, loginDemo,
+  validEmail, validIco, registrationFieldErrors, parseCsDate, formatCsDate, stashPending,
+  recordsReady, canShowDriverHome, postLoginView, createEmptyDb, rehydrate, registerDriver, loginDemo,
   checkPin as checkPinDemo, createOffer, placeOrder, startRide, endRide, markPaid, recordEet,
   setEet, proposeChange, discardChange, cancelRide, confirmationView, emailStatusView,
   recordSimulatedEmail, toCsv, paymentSums, ridesFor, updateProfile, setCarrierStatus, flushEet, setPin,
@@ -110,6 +111,45 @@ function clearRecovering() {
   try { sessionStorage.removeItem("svezemete.recovery"); } catch { /* ignore */ }
 }
 
+const PENDING_KEY = "svezemete.pending";
+
+function readPending() {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePending(input) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(stashPending(input))); } catch { /* ignore */ }
+}
+
+function clearPending() {
+  try { localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ }
+}
+
+function skipAccountStep() {
+  return !!(S.bundle?.me && S.bundle.me.role === "driver" && !recordsReady(S.bundle));
+}
+
+function loginState(view = S.view) {
+  return {
+    backend: !!S.backend,
+    recovering: S.recovering,
+    view,
+    signedIn: !!S.bundle?.me,
+    role: S.bundle?.me?.role,
+    hasCarrier: !!S.bundle?.carrier,
+    hasDriver: !!S.bundle?.driver,
+    hasVehicle: !!S.bundle?.vehicle,
+    hasPending: !!readPending(),
+    hasPin: S.bundle?.driver ? S.bundle.driver.hasPin === true : undefined,
+    customerLock: S.customerLock,
+  };
+}
+
 function focusField(name) {
   const el = document.querySelector(`[data-field="${name}"]`);
   if (!el) return;
@@ -176,17 +216,45 @@ async function refresh() {
   S.bundle = await S.backend.load();
 }
 
-function viewNow() {
-  if (!S.backend) return "unconfigured";
-  if (S.recovering || S.view === "new-password") return "new-password";
-  const signedIn = !!S.bundle?.me;
-  if (!signedIn) {
-    if (S.view === "register") return "register";
-    if (S.view === "forgot") return "forgot";
-    return "login";
+function goAfterLogin() {
+  if (!recordsReady(S.bundle) && readPending()) {
+    go("finishing");
+    finishSessionRegistration();
+    return;
   }
-  if (S.customerLock && !["customer", "order", "terms", "pin"].includes(S.view)) return "pin";
-  return S.view;
+  const next = postLoginView(loginState("home"));
+  if (next === "home" && recordsReady(S.bundle) && S.bundle.carrier.status !== "active") {
+    S.info = "Registrace čeká na ověření správcem.";
+  }
+  go(next === "login" ? "home" : next);
+}
+
+async function finishSessionRegistration() {
+  if (!S.backend?.completePending) {
+    go(readPending() || !S.bundle?.me ? "login" : "incomplete");
+    return;
+  }
+  S.view = "finishing";
+  S.error = "";
+  render();
+  try {
+    S.bundle = await S.backend.completePending();
+    if (!recordsReady(S.bundle)) {
+      if (readPending()) throw new Error("Registraci se nepodařilo dokončit. Zkuste to znovu, nebo údaje vyplňte znovu.");
+      go("incomplete");
+      return;
+    }
+    goAfterLogin();
+  } catch (err) {
+    console.error(err);
+    S.error = asCzechError(err);
+    go("incomplete");
+  }
+}
+
+
+function viewNow() {
+  return postLoginView(loginState());
 }
 
 const PAY_INFO = {
@@ -275,6 +343,7 @@ function lastStart() {
 
 function viewHome() {
   if (S.bundle.me.role === "admin") return viewAdmin();
+  if (!canShowDriverHome(S.bundle)) return viewIncomplete();
   const b = S.bundle;
   if (b.carrier.status !== "active") {
     return shell("Registrace / stav", `
@@ -392,7 +461,12 @@ function field(label, name, opts = {}) {
     const on = opts.defaultOn ? S.draft[name] !== false : S.draft[name] === true;
     return `<label class="consent${err ? " has-error" : ""}"><input type="checkbox" data-field="${name}" ${on ? "checked" : ""}${described}><span>${label}</span>${errHtml}</label>`;
   }
-  return `<label class="${err ? "has-error" : ""}">${label}<input class="${err ? "invalid" : ""}" type="${type}" data-field="${name}" value="${esc(val)}" ${opts.mode ? `inputmode="${opts.mode}"` : ""} ${opts.ac ? `autocomplete="${opts.ac}"` : ""} ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ""}${described}>${errHtml}</label>`;
+  if (type === "date") {
+    const shown = formatCsDate(val) || val;
+    const dateErr = err ? errHtml : `<span class="hint date-hint">den.měsíc.rok, například 31.12.2028</span>`;
+    return `<label class="${err ? "has-error" : ""}">${label}<input class="${err ? "invalid" : ""}" type="text" inputmode="numeric" lang="cs" data-field="${name}" value="${esc(shown)}" placeholder="dd.mm.rrrr" autocomplete="off"${described}>${dateErr}</label>`;
+  }
+  return `<label class="${err ? "has-error" : ""}">${label}<input class="${err ? "invalid" : ""}" type="${type}" data-field="${name}" value="${esc(val)}" ${opts.mode ? `inputmode="${opts.mode}"` : ""} ${opts.ac ? `autocomplete="${opts.ac}"` : ""} ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ""} lang="cs"${described}>${errHtml}</label>`;
 }
 
 function doc(title, inner, open) {
@@ -422,11 +496,11 @@ function viewRegister() {
     body = `<div class="row2">${field("Jméno řidiče", "firstName")}${field("Příjmení", "lastName")}</div>
       ${field("Registrační značka", "rz")}<div class="row2">${field("Tovární značka", "make")}${field("Obchodní označení", "model")}</div>
       <h2>Doklady</h2>
-      ${doc("Koncese dopravce", `${field("Koncese (číslo, pokud ho máte u sebe)", "concessionNumber")}${field("Platnost koncese", "concessionUntil", { type: "date" })}`)}
-      ${doc("Průkaz řidiče taxislužby", `${field("Číslo oprávnění řidiče taxislužby", "licenceNumber")}${field("Platnost oprávnění", "licenceUntil", { type: "date" })}`, true)}
-      ${doc("Evidence vozidla a nálepka", `${field("Výpis z evidence vozidel taxislužby", "registryNote", { placeholder: "číslo nebo poznámka" })}`, true)}
-      ${doc("Platná STK / emise", `<p class="hint">Mějte ve vozidle platnou technickou a emisní kontrolu. Aplikace ji neukládá.</p>`)}
-      ${doc("Povinné ručení pro taxi", `<p class="hint">Pojištění odpovědnosti musí krýt provoz taxislužby. Aplikace ho neukládá.</p>`)}
+      ${doc("Koncese dopravce (nepovinné)", `${field("Koncese (číslo, pokud ho máte u sebe)", "concessionNumber")}${field("Platnost koncese", "concessionUntil", { type: "date" })}`)}
+      ${doc("Průkaz řidiče taxislužby (povinné)", `${field("Číslo oprávnění řidiče taxislužby", "licenceNumber")}${field("Platnost oprávnění", "licenceUntil", { type: "date" })}`, true)}
+      ${doc("Evidence vozidla a nálepka (nepovinné)", `${field("Výpis z evidence vozidel taxislužby", "registryNote", { placeholder: "číslo nebo poznámka" })}`, true)}
+      ${doc("Platná STK / emise (nepovinné)", `<p class="hint">Mějte ve vozidle platnou technickou a emisní kontrolu. Aplikace ji neukládá.</p>`)}
+      ${doc("Povinné ručení pro taxi (nepovinné)", `<p class="hint">Pojištění odpovědnosti musí krýt provoz taxislužby. Aplikace ho neukládá.</p>`)}
       ${field("Jezdím bez taxametru, jen na elektronickou objednávku (§ 21 odst. 6). Vozidlo nemá střešní svítilnu ani nápis TAXI.", "noTaximeter", { type: "checkbox", defaultOn: true })}`;
   } else {
     const d = S.draft;
@@ -440,13 +514,53 @@ function viewRegister() {
       ${field("Beru na vědomí, že aplikace je bezplatný nástroj, údaje o jízdách jsou neměnné a za přepravu odpovídám já jako dopravce.", "acceptPlatform", { type: "checkbox" })}
       <p class="hint">Evidence tržeb (EET 2.0) se při registraci nezapíná. Později ji lze přidat v profilu. Dokud je vypnutá, v jízdě ani v e-mailu se neobjeví.</p>`;
   }
-  const next = ["", "Pokračovat na účet", "Pokračovat na řidiče a vozidlo", "Pokračovat ke kontrole", "Odeslat registraci k ověření"][step];
+  const next = skipAccountStep()
+    ? ["", "Pokračovat na řidiče a vozidlo", "", "Pokračovat ke kontrole", "Odeslat registraci k ověření"][step]
+    : ["", "Pokračovat na účet", "Pokračovat na řidiče a vozidlo", "Pokračovat ke kontrole", "Odeslat registraci k ověření"][step];
+  const submitting = S.busy && step === 4;
+  const backView = S.bundle?.me ? "incomplete" : "login";
   return shell(`Registrace / ${step} ze 4`, `
     <div class="steps" aria-hidden="true">${[1, 2, 3, 4].map((n) => `<span class="${n <= step ? "on" : ""}"></span>`).join("")}</div>
     <h1>${titles[step]}</h1>
+    ${skipAccountStep() && step === 1 ? `<p class="hint">E-mail je potvrzený. Doplňte údaje dopravce. Pokud jste je zadávali v jiném zařízení, je potřeba je vyplnit znovu.</p>` : ""}
     ${body}
-    <button type="button" class="btn xl" data-act="${step === 4 ? "reg-submit" : "reg-next"}">${next}</button>
-    ${step > 1 ? `<button type="button" class="btn ghost" data-act="reg-back">Zpět</button>` : `<button type="button" class="btn ghost" data-act="go" data-view="login">Zpět na přihlášení</button>`}`);
+    <button type="button" class="btn xl" data-act="${step === 4 ? "reg-submit" : "reg-next"}" ${submitting ? "disabled" : ""}>${submitting ? "Odesílám…" : next}</button>
+    ${submitting ? "" : (step > 1 ? `<button type="button" class="btn ghost" data-act="reg-back">Zpět</button>` : `<button type="button" class="btn ghost" data-act="go" data-view="${backView}">Zpět na přihlášení</button>`)}`);
+}
+
+function viewRegisterSent() {
+  const email = S.regEmail || S.draft.loginEmail || S.draft.email || "";
+  return shell("Registrace", `
+    <h1>Registrace odeslána</h1>
+    <p>Na e-mail <strong>${esc(email)}</strong> jsme poslali odkaz pro potvrzení. Klikněte na něj a pak se přihlaste – registrace se dokončí automaticky.</p>
+    <p class="hint">Pokud e-mail nevidíte, zkontrolujte i složku spam.</p>
+    <button type="button" class="btn xl" data-act="go" data-view="login">Zpět na přihlášení</button>`);
+}
+
+function viewFinishing() {
+  return shell("Registrace", `
+    <h1>Dokončuji registraci…</h1>
+    <p class="hint">Ukládám údaje dopravce, řidiče a vozidla. Chvíli počkejte.</p>`);
+}
+
+function viewIncomplete() {
+  const email = S.bundle?.me?.email || "";
+  return shell("Dokončení registrace", `
+    <h1>Dokončete registraci</h1>
+    <p>Účet je potvrzený${email ? ` (${esc(email)})` : ""}, ale údaje dopravce, řidiče a vozidla ještě nejsou uložené.</p>
+    <p class="hint">Pokud jste registraci začínali v tomto zařízení, údaje se doplní automaticky. Jinak je vyplňte znovu.</p>
+    <button type="button" class="btn xl" data-act="continue-registration">Pokračovat v registraci</button>
+    <button type="button" class="btn ghost" data-act="retry-pending">Zkusit znovu</button>
+    <button type="button" class="btn ghost" data-act="logout">Odhlásit</button>`);
+}
+
+function viewSetPin() {
+  return shell("Nastavení PIN", `
+    <h1>Nastavte si PIN</h1>
+    <p class="hint">PIN zadáte, když vám zákazník vrátí telefon. Jsou to 4 číslice.</p>
+    ${field("PIN (4 číslice)", "pin", { mode: "numeric", ac: "off" })}
+    ${field("PIN znovu", "pin2", { mode: "numeric", ac: "off" })}
+    <button type="button" class="btn xl" data-act="save-first-pin"${S.busy ? " disabled" : ""}>${S.busy ? "Ukládám…" : "Uložit PIN"}</button>`);
 }
 
 function acceptedOffer(b) {
@@ -747,6 +861,7 @@ function viewHistory() {
 }
 
 function viewProfile() {
+  if (!canShowDriverHome(S.bundle) && S.bundle?.me?.role !== "admin") return viewIncomplete();
   const b = S.bundle;
   if (!S.draft._profile) {
     Object.assign(S.draft, {
@@ -851,6 +966,7 @@ function viewAdmin() {
 }
 
 function render() {
+  try {
   document.body.classList.toggle("light", !S.night);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", S.night ? "#07070c" : "#f4f5fb");
@@ -862,6 +978,10 @@ function render() {
     forgot: viewForgot,
     "new-password": viewNewPassword,
     register: viewRegister,
+    "register-sent": viewRegisterSent,
+    finishing: viewFinishing,
+    incomplete: viewIncomplete,
+    "set-pin": viewSetPin,
     home: viewHome,
     offer: viewOffer,
     quick: viewQuick,
@@ -883,8 +1003,24 @@ function render() {
     "ask-cancel": viewAskCancel,
     "reset-ask": viewReset,
   };
-  $("app").innerHTML = (screens[view] || viewLogin)();
-  armClock();
+  const html = (screens[view] || viewLogin)();
+    if (!html) throw new Error("Obrazovka je prázdná.");
+    $("app").innerHTML = html;
+    armClock();
+  } catch (err) {
+    console.error(err);
+    const app = $("app");
+    if (!app) return;
+    app.innerHTML = `<div class="app"><header>
+      <div class="brand"><div class="mark" aria-hidden="true">S</div><div class="nm">SvezemeTě</div></div>
+    </header><div class="rule" aria-hidden="true"></div><main>
+      <p class="mode">Chyba</p>
+      <h1>Obrazovka se nenačetla</h1>
+      <p class="hint">${esc(asCzechError(err))}</p>
+      <button type="button" class="btn xl" data-act="retry-boot">Zkusit znovu</button>
+      <button type="button" class="btn ghost" data-act="logout">Odhlásit</button>
+    </main></div>`;
+  }
 }
 
 let clockTimer;
@@ -919,20 +1055,25 @@ function numPrice(v) {
 }
 
 async function run(act, el) {
-  if (S.busy) return;
-  S.busy = true;
+  const lock = !["pin-key", "toggle-night"].includes(act);
+  if (lock && S.busy) return;
+  if (lock) pullDraft();
+  if (lock) S.error = "";
+  if (lock && act !== "ares") S.info = "";
+  if (lock && !["reg-next", "reg-submit"].includes(act)) S.fieldErrors = {};
+  if (lock) S.busy = true;
+  if (act === "reg-submit" || act === "save-first-pin" || act === "retry-pending") render();
   try {
-    if (!["pin-key", "toggle-night"].includes(act)) pullDraft();
-    S.error = "";
-    if (act !== "ares") S.info = "";
-    if (!["reg-next", "reg-submit"].includes(act)) S.fieldErrors = {};
     await actions[act]?.(el);
   } catch (err) {
     console.error(err);
     S.error = asCzechError(err);
     render();
   } finally {
-    S.busy = false;
+    if (lock) {
+      S.busy = false;
+      if (["register", "set-pin", "finishing", "incomplete"].includes(S.view)) render();
+    }
   }
 }
 
@@ -1024,17 +1165,24 @@ const actions = {
     render();
   },
   async "reg-next"() {
-    const fields = registrationFieldErrors(S.draft, S.regStep);
+    const fields = registrationFieldErrors(S.draft, S.regStep, { skipAccount: skipAccountStep() });
     if (Object.keys(fields).length) { showStepErrors(fields); return; }
     S.fieldErrors = {};
     if (S.regStep === 1 && !S.draft.loginEmail) S.draft.loginEmail = S.draft.email;
     S.regStep += 1;
+    if (skipAccountStep() && S.regStep === 2) S.regStep = 3;
     go("register", { keepDraft: true });
   },
-  async "reg-back"() { S.fieldErrors = {}; S.regStep = Math.max(1, S.regStep - 1); go("register", { keepDraft: true }); },
+  async "reg-back"() {
+    S.fieldErrors = {};
+    S.regStep = Math.max(1, S.regStep - 1);
+    if (skipAccountStep() && S.regStep === 2) S.regStep = 1;
+    go("register", { keepDraft: true });
+  },
   async "reg-submit"() {
+    const opts = { skipAccount: skipAccountStep() };
     for (const n of [1, 2, 3, 4]) {
-      const fields = registrationFieldErrors(S.draft, n);
+      const fields = registrationFieldErrors(S.draft, n, opts);
       if (Object.keys(fields).length) {
         S.regStep = n;
         showStepErrors(fields);
@@ -1042,9 +1190,18 @@ const actions = {
       }
     }
     S.fieldErrors = {};
-    S.bundle = await S.backend.register({ ...S.draft });
+    const result = await S.backend.register({ ...S.draft });
+    if (result?.pendingConfirm) {
+      S.regEmail = result.email;
+      S.regStep = 1;
+      go("register-sent", { keepDraft: true });
+      return;
+    }
+    S.bundle = result;
     S.draft = {};
     S.regStep = 1;
+    if (!recordsReady(S.bundle)) { go("incomplete"); return; }
+    if (S.bundle.driver && S.bundle.driver.hasPin === false) { go("set-pin"); return; }
     S.info = S.bundle.carrier.status === "active" ? "Registrace je hotová. Můžete zadat první jízdu." : "Registrace čeká na ověření správcem.";
     go("home");
   },
@@ -1055,6 +1212,35 @@ const actions = {
     if (!validEmail(email)) throw new Error("Zadejte platný e-mail.");
     S.bundle = await S.backend.login(email, password);
     S.draft = {};
+    goAfterLogin();
+  },
+  async "continue-registration"() {
+    const email = S.bundle?.me?.email || "";
+    S.regStep = 1;
+    S.draft = { ...(readPending() || {}), noTaximeter: true, email: S.draft.email || email, loginEmail: S.draft.loginEmail || email };
+    delete S.draft.password;
+    delete S.draft.password2;
+    S.fieldErrors = {};
+    go("register", { keepDraft: true });
+  },
+  async "retry-pending"() {
+    await finishSessionRegistration();
+  },
+  async "retry-boot"() {
+    S.error = "";
+    await finishSessionRegistration();
+  },
+  async "save-first-pin"() {
+    const pin = String(S.draft.pin || "");
+    const pin2 = String(S.draft.pin2 || "");
+    if (!pin) throw new Error("Vyplňte PIN.");
+    if (!/^\d{4}$/.test(pin)) throw new Error("PIN jsou 4 číslice.");
+    if (pin !== pin2) throw new Error("PIN se neshoduje.");
+    await S.backend.changePin(pin);
+    if (S.bundle?.driver) S.bundle.driver.hasPin = true;
+    await refresh();
+    S.draft = {};
+    S.info = "PIN je nastavený. Můžete zadat první jízdu, jakmile správce registraci schválí, nebo hned, pokud je účet aktivní.";
     go("home");
   },
   async "pick-user"(el) { S.draft.loginEmail = el.dataset.email; render(); },
@@ -1313,15 +1499,17 @@ function makeBundle(db, session, mode, terms) {
       },
     };
   }
-  const carrier = db.carriers.find((c) => c.id === session.carrierId);
-  const driver = db.drivers.find((d) => d.userId === session.userId) || db.drivers.find((d) => d.carrierId === session.carrierId);
-  const vehicle = db.vehicles.find((v) => v.carrierId === session.carrierId);
-  const eet = db.eetSettings.find((e) => e.carrierId === session.carrierId) || { enabled: false };
+  const carrier = db.carriers.find((c) => c.id === session.carrierId) || db.carriers.find((c) => c.ownerId === session.userId) || null;
+  const driverRow = db.drivers.find((d) => d.userId === session.userId) || (carrier ? db.drivers.find((d) => d.carrierId === carrier.id) : null);
+  const vehicle = (carrier && db.vehicles.find((v) => v.carrierId === carrier.id)) || null;
+  const eet = (carrier && db.eetSettings.find((e) => e.carrierId === carrier.id)) || { enabled: false };
   const user = db.users.find((u) => u.id === session.userId);
+  const driver = driverRow ? { ...driverRow, hasPin: driverRow.hasPin === true || !!driverRow.pinHash, pinHash: undefined } : null;
+  if (driver) delete driver.pinHash;
   return {
     ...base,
-    me: { id: session.userId, role: "driver", name: carrier?.name || "", email: user?.email || session.email || "" },
-    carrier, driver, vehicle, eet, rides: ridesFor(db, session.carrierId), admin: null,
+    me: { id: session.userId, role: "driver", name: carrier?.name || user?.name || "", email: user?.email || session.email || "" },
+    carrier, driver, vehicle, eet, rides: ridesFor(db, carrier?.id || session.carrierId), admin: null,
   };
 }
 
@@ -1353,6 +1541,7 @@ function demoBackend() {
     },
     async loginAdmin() { write({ role: "admin", userId: "demo-admin" }); return makeBundle(db, read(), "demo"); },
     async logout() { write(null); },
+    async completePending() { return makeBundle(db, read(), "demo"); },
     async resetPassword() { throw new Error("Obnova hesla je v ukázkovém režimu vypnutá."); },
     async updatePassword() { throw new Error("Obnova hesla je v ukázkovém režimu vypnutá."); },
     async checkPin(pin) { return checkPinDemo(db, read().userId, pin); },
@@ -1383,7 +1572,7 @@ function demoBackend() {
 
 const mapRow = {
   carrier: (r) => ({ id: r.id, ownerId: r.owner_id, name: r.name, ico: r.ico, dic: r.dic || "", vatPayer: !!r.vat_payer, street: r.street || "", city: r.city || "", zip: r.zip || "", sidlo: r.sidlo || "", iban: r.iban || "", email: r.email || "", phone: r.phone || "", concessionNumber: r.concession_number || "", concessionUntil: r.concession_until || "", status: r.status, createdAt: r.created_at }),
-  driver: (r) => ({ id: r.id, carrierId: r.carrier_id, userId: r.user_id, firstName: r.first_name, lastName: r.last_name, licenceNumber: r.licence_number, licenceUntil: r.licence_until || "" }),
+  driver: (r) => ({ id: r.id, carrierId: r.carrier_id, userId: r.user_id, firstName: r.first_name, lastName: r.last_name, licenceNumber: r.licence_number, licenceUntil: r.licence_until || "", hasPin: !!r.pin_hash }),
   vehicle: (r) => ({ id: r.id, carrierId: r.carrier_id, rz: r.rz, make: r.make, model: r.model, registryNote: r.registry_note || "", noTaximeter: r.no_taximeter !== false }),
   eet: (r) => ({ carrierId: r.carrier_id, enabled: !!r.enabled, dicEic: r.dic_eic || "", evidencniJednotka: r.evidencni_jednotka || "", zarizeni: r.zarizeni || "SVEZEMETE-1", simulateOffline: !!r.simulate_offline, certUploaded: !!r.cert_uploaded, certFilename: r.cert_filename || "" }),
   ride: (r) => ({ id: r.id, carrierId: r.carrier_id, status: r.status, currentOfferId: r.current_offer_id, pendingOfferId: r.pending_offer_id, startedAt: r.started_at, endedAt: r.ended_at, cancelReason: r.cancel_reason || "", createdAt: r.created_at, timeSource: r.time_source || "database" }),
@@ -1457,6 +1646,26 @@ function remoteBackend() {
     if (error) throw new Error(friendly(error));
     return data;
   }
+  let completing = null;
+  async function completePending() {
+    if (completing) return completing;
+    completing = (async () => {
+      if (!session) await pull();
+      if (!session || session.role !== "driver") return makeBundle(cache, session, "remote", terms);
+      if (session.carrierId && cache.drivers.some((d) => d.userId === session.userId) && cache.vehicles.some((v) => v.carrierId === session.carrierId)) {
+        clearPending();
+        return makeBundle(cache, session, "remote", terms);
+      }
+      const pending = readPending();
+      if (!pending) return makeBundle(cache, session, "remote", terms);
+      await finishRemote(sb, pending, session.userId);
+      await pull();
+      if (session.carrierId) clearPending();
+      return makeBundle(cache, session, "remote", terms);
+    })();
+    try { return await completing; }
+    finally { completing = null; }
+  }
   return {
     mode: "remote",
     async init() {
@@ -1475,31 +1684,33 @@ function remoteBackend() {
       if (data.session && !S.recovering) await pull().catch((e) => { S.error = asCzechError(e); });
     },
     async load() { if (session) await pull(); return makeBundle(cache, session, "remote", terms); },
+    async completePending() { return completePending(); },
     async register(input) {
       const email = String(input.loginEmail || input.email).trim().toLowerCase();
+      if (session?.userId && session.role === "driver") {
+        writePending(input);
+        await finishRemote(sb, input, session.userId);
+        await pull();
+        if (session.carrierId) clearPending();
+        return makeBundle(cache, session, "remote", terms);
+      }
       const { data, error } = await sb.auth.signUp({ email, password: input.password, options: { data: { name: input.name }, emailRedirectTo: appBaseUrl() } });
       if (error) throw new Error(authErrorCs(error));
       if (!data.session) {
-        const pending = { ...input };
-        localStorage.setItem("svezemete.pending", JSON.stringify(pending));
-        throw new Error("Účet je založený, ale přihlášení ještě není aktivní. Vypněte v Supabase povinné potvrzení e-mailu (návod v README) a pak se přihlaste. Údaje registrace zatím drží tento prohlížeč.");
+        writePending(input);
+        return { pendingConfirm: true, email };
       }
+      writePending(input);
       await finishRemote(sb, input, data.session.user.id);
-      localStorage.removeItem("svezemete.pending");
       await pull();
+      if (session?.carrierId) clearPending();
       return makeBundle(cache, session, "remote", terms);
     },
     async login(email, password) {
       const { error } = await sb.auth.signInWithPassword({ email: String(email).trim(), password });
       if (error) throw new Error(authErrorCs(error));
       await pull();
-      const pending = JSON.parse(localStorage.getItem("svezemete.pending") || "null");
-      if (pending && session && !session.carrierId && session.role === "driver") {
-        await finishRemote(sb, pending, session.userId);
-        localStorage.removeItem("svezemete.pending");
-        await pull();
-      }
-      return makeBundle(cache, session, "remote", terms);
+      return completePending();
     },
     async logout() { await sb.auth.signOut(); session = null; },
     async resetPassword(email) {
@@ -1542,7 +1753,7 @@ function remoteBackend() {
         zip: patch.zip, iban: String(patch.iban || "").replace(/\s/g, "").toUpperCase(), email: patch.email, phone: patch.phone,
       }).eq("id", cid));
       await must(sb.from("drivers").update({
-        first_name: patch.firstName, last_name: patch.lastName, licence_number: patch.licenceNumber, licence_until: patch.licenceUntil || null,
+        first_name: patch.firstName, last_name: patch.lastName, licence_number: patch.licenceNumber, licence_until: parseCsDate(patch.licenceUntil) || null,
       }).eq("user_id", session.userId));
       await must(sb.from("vehicles").update({
         rz: patch.rz, make: patch.make, model: patch.model, registry_note: patch.registryNote || "",
@@ -1576,28 +1787,45 @@ function remoteBackend() {
 }
 
 async function finishRemote(sb, input, userId) {
-  const ico = String(input.ico).replace(/\s/g, "");
-  const ins = await sb.from("carriers").insert({
-    owner_id: userId, name: input.name.trim(), ico, dic: input.dic || "", vat_payer: !!input.vatPayer,
-    street: input.street, city: input.city, zip: input.zip, iban: String(input.iban).replace(/\s/g, "").toUpperCase(),
-    email: input.email, phone: input.phone, concession_number: input.concessionNumber || "",
-    concession_until: input.concessionUntil || null,
-  }).select("id").single();
-  if (ins.error) throw new Error(ins.error.code === "23505" ? "Dopravce s tímto IČO už existuje." : asCzechError(ins.error));
-  const cid = ins.data.id;
-  const d = await sb.from("drivers").insert({
-    carrier_id: cid, user_id: userId, first_name: input.firstName.trim(), last_name: input.lastName.trim(),
-    licence_number: input.licenceNumber.trim(), licence_until: input.licenceUntil || null,
-  });
-  if (d.error) throw new Error(asCzechError(d.error));
-  const v = await sb.from("vehicles").insert({
-    carrier_id: cid, rz: String(input.rz).toUpperCase().trim(), make: input.make.trim(), model: input.model.trim(),
-    registry_note: input.registryNote || "", no_taximeter: true,
-  });
-  if (v.error) throw new Error(asCzechError(v.error));
-  await sb.from("eet_settings").insert({ carrier_id: cid, enabled: false });
-  const pin = await sb.rpc("set_pin", { p_pin: input.pin });
-  if (pin.error) throw new Error(asCzechError(pin.error));
+  const ico = String(input.ico || "").replace(/\s/g, "");
+  const existing = await sb.from("carriers").select("id").eq("owner_id", userId).maybeSingle();
+  if (existing.error) throw new Error(asCzechError(existing.error));
+  let cid = existing.data?.id;
+  if (!cid) {
+    const ins = await sb.from("carriers").insert({
+      owner_id: userId, name: String(input.name || "").trim(), ico, dic: input.dic || "", vat_payer: !!input.vatPayer,
+      street: input.street, city: input.city, zip: input.zip, iban: String(input.iban || "").replace(/\s/g, "").toUpperCase(),
+      email: input.email, phone: input.phone, concession_number: input.concessionNumber || "",
+      concession_until: parseCsDate(input.concessionUntil) || null,
+    }).select("id").single();
+    if (ins.error) throw new Error(ins.error.code === "23505" ? "Dopravce s tímto IČO už existuje." : asCzechError(ins.error));
+    cid = ins.data.id;
+  }
+  const haveDriver = await sb.from("drivers").select("id").eq("user_id", userId).maybeSingle();
+  if (haveDriver.error) throw new Error(asCzechError(haveDriver.error));
+  if (!haveDriver.data) {
+    const d = await sb.from("drivers").insert({
+      carrier_id: cid, user_id: userId, first_name: String(input.firstName || "").trim(), last_name: String(input.lastName || "").trim(),
+      licence_number: String(input.licenceNumber || "").trim(), licence_until: parseCsDate(input.licenceUntil) || null,
+    });
+    if (d.error) throw new Error(asCzechError(d.error));
+  }
+  const haveVehicle = await sb.from("vehicles").select("id").eq("carrier_id", cid).maybeSingle();
+  if (haveVehicle.error) throw new Error(asCzechError(haveVehicle.error));
+  if (!haveVehicle.data) {
+    const v = await sb.from("vehicles").insert({
+      carrier_id: cid, rz: String(input.rz || "").toUpperCase().trim(), make: String(input.make || "").trim(), model: String(input.model || "").trim(),
+      registry_note: input.registryNote || "", no_taximeter: true,
+    });
+    if (v.error) throw new Error(asCzechError(v.error));
+  }
+  const haveEet = await sb.from("eet_settings").select("carrier_id").eq("carrier_id", cid).maybeSingle();
+  if (!haveEet.data) await sb.from("eet_settings").insert({ carrier_id: cid, enabled: false });
+  const pin = String(input.pin || "");
+  if (/^\d{4}$/.test(pin)) {
+    const res = await sb.rpc("set_pin", { p_pin: pin });
+    if (res.error) console.error(res.error);
+  }
 }
 
 function bind() {
@@ -1619,6 +1847,14 @@ function bind() {
     const el = e.target;
     if (!el.dataset?.field) return;
     S.draft[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
+    if (el.type === "checkbox" && el.checked && S.fieldErrors?.[el.dataset.field]) {
+      delete S.fieldErrors[el.dataset.field];
+      const label = el.closest("label");
+      label?.classList.remove("has-error");
+      label?.querySelector(".field-error")?.remove();
+      el.removeAttribute("aria-invalid");
+      el.removeAttribute("aria-describedby");
+    }
     const btn = $("order-btn");
     const ready = S.draft.consentTerms === true && S.draft.consentPrice === true && validEmail(S.draft.email);
     if (btn) btn.disabled = !ready;
@@ -1664,6 +1900,8 @@ async function boot() {
     return;
   }
   S.backend = hasServer ? remoteBackend() : demoBackend();
+  S.view = "boot";
+  render();
   try { if (S.backend.init) await S.backend.init(); } catch (err) { S.error = asCzechError(err); }
   try { S.bundle = await S.backend.load(); } catch (err) { S.error = asCzechError(err); S.bundle = null; }
   let saved = null;
@@ -1674,11 +1912,19 @@ async function boot() {
     S.view = "new-password";
     S.customerLock = false;
   } else if (S.bundle?.me) {
-    S.view = saved?.view && !["login", "boot", "unconfigured", "forgot", "new-password", "register"].includes(saved.view) ? saved.view : "home";
     S.rideId = saved?.rideId || null;
     S.customerLock = !!saved?.customerLock;
     S.regStep = saved?.regStep || 1;
-    if (!rideBy() && ["handoff", "customer", "order", "pin", "ready", "riding", "pay", "confirm", "change", "end-ask"].includes(S.view)) S.view = "home";
+    if (S.bundle.me.role === "driver" && !recordsReady(S.bundle) && readPending() && S.backend.completePending) {
+      S.view = "finishing";
+      render();
+      try { S.bundle = await S.backend.completePending(); } catch (err) { S.error = asCzechError(err); }
+    }
+    const restored = saved?.view && !["login", "boot", "unconfigured", "forgot", "new-password", "register", "register-sent", "finishing", "incomplete", "set-pin"].includes(saved.view) ? saved.view : "home";
+    S.view = postLoginView(loginState(restored));
+    if (!rideBy() && ["handoff", "customer", "order", "pin", "ready", "riding", "pay", "confirm", "change", "end-ask"].includes(S.view)) {
+      S.view = postLoginView(loginState("home"));
+    }
   } else {
     S.customerLock = false;
     S.view = "login";

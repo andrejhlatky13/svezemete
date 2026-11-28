@@ -50,6 +50,70 @@ export function validPhone(phone) {
   return /^\d{9}$/.test(digits);
 }
 
+/** Přijme dd.mm.rrrr, d.m.rrrr i ISO rrrr-mm-dd. Vrátí ISO, nebo null. */
+export function parseCsDate(value) {
+  const s = String(value || "").trim();
+  if (!s) return null;
+  let y, m, d;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const cs = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (iso) { y = Number(iso[1]); m = Number(iso[2]); d = Number(iso[3]); }
+  else if (cs) { d = Number(cs[1]); m = Number(cs[2]); y = Number(cs[3]); }
+  else return null;
+  if (y < 1990 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+export function formatCsDate(value) {
+  const iso = parseCsDate(value);
+  if (!iso) return String(value || "").trim();
+  const [y, m, d] = iso.split("-");
+  return `${Number(d)}.${Number(m)}.${y}`;
+}
+
+/** Údaje registrace do localStorage: heslo se neukládá. PIN ano, jen v tomto prohlížeči do prvního přihlášení. */
+export function stashPending(input) {
+  const pending = { ...input };
+  delete pending.password;
+  delete pending.password2;
+  return pending;
+}
+
+export function recordsReady(bundle) {
+  return !!(bundle?.carrier && bundle?.driver && bundle?.vehicle);
+}
+
+export function canShowDriverHome(bundle) {
+  if (!bundle?.me) return false;
+  if (bundle.me.role === "admin") return true;
+  return recordsReady(bundle);
+}
+
+/**
+ * Kam má jít přihlášený (nebo právě potvrzený) účet.
+ * Nikdy nevrací home, pokud chybí dopravce — to by na domácí obrazovce spadlo na prázdnou stránku.
+ */
+export function postLoginView(state) {
+  if (!state.backend) return "unconfigured";
+  if (state.recovering || state.view === "new-password") return "new-password";
+  if (!state.signedIn) {
+    if (["register", "register-sent", "forgot"].includes(state.view)) return state.view;
+    return "login";
+  }
+  const ready = !!(state.hasCarrier && state.hasDriver && state.hasVehicle);
+  if (state.role === "driver" && !ready) {
+    if (state.view === "finishing") return "finishing";
+    if (state.view === "register") return "register";
+    if (state.hasPending) return "finishing";
+    return "incomplete";
+  }
+  if (state.role === "driver" && ready && state.hasPin === false) return "set-pin";
+  if (state.customerLock && !["customer", "order", "terms", "pin"].includes(state.view)) return "pin";
+  return state.view;
+}
+
 export function validIban(iban) {
   const s = String(iban || "").replace(/\s/g, "").toUpperCase();
   return /^CZ\d{22}$/.test(s);
@@ -185,10 +249,13 @@ function sidloOf(input) {
   return [street, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 }
 
-export function registrationFieldErrors(input, step) {
+export function registrationFieldErrors(input, step, opts = {}) {
   const e = {};
   const add = (field, message) => { if (!e[field]) e[field] = message; };
-  const need = (n) => step == null || step === n;
+  const need = (n) => {
+    if (opts.skipAccount && n === 2) return false;
+    return step == null || step === n;
+  };
   if (need(1)) {
     if (!String(input.name || "").trim()) add("name", "Vyplňte jméno nebo název firmy.");
     if (!String(input.ico || "").trim()) add("ico", "Vyplňte IČO.");
@@ -225,7 +292,11 @@ export function registrationFieldErrors(input, step) {
     if (!String(input.make || "").trim()) add("make", "Vyplňte tovární značku vozidla.");
     if (!String(input.model || "").trim()) add("model", "Vyplňte obchodní označení vozidla.");
     if (!String(input.licenceNumber || "").trim()) add("licenceNumber", "Vyplňte číslo oprávnění řidiče taxislužby.");
-    if (!input.licenceUntil) add("licenceUntil", "Vyplňte platnost oprávnění řidiče taxislužby.");
+    if (!String(input.licenceUntil || "").trim()) add("licenceUntil", "Vyplňte platnost oprávnění řidiče taxislužby.");
+    else if (!parseCsDate(input.licenceUntil)) add("licenceUntil", "Zadejte datum jako den.měsíc.rok, například 31.12.2028.");
+    if (String(input.concessionUntil || "").trim() && !parseCsDate(input.concessionUntil)) {
+      add("concessionUntil", "Zadejte datum jako den.měsíc.rok, například 31.12.2028.");
+    }
     if (input.noTaximeter === false) add("noTaximeter", "Tato verze je jen pro jízdu bez taxametru podle § 21 odst. 6. Vozidlo nesmí mít střešní svítilnu ani nápis TAXI.");
   }
   if (need(4)) {
@@ -267,7 +338,7 @@ export async function registerDriver(db, input, { activate = true } = {}) {
     email: String(input.email).trim(),
     phone: String(input.phone).trim(),
     concessionNumber: String(input.concessionNumber || "").trim(),
-    concessionUntil: input.concessionUntil || "",
+    concessionUntil: parseCsDate(input.concessionUntil) || "",
     status: activate ? "active" : "pending",
     createdAt: nowIso(db),
   };
@@ -278,7 +349,7 @@ export async function registerDriver(db, input, { activate = true } = {}) {
     firstName: String(input.firstName).trim(),
     lastName: String(input.lastName).trim(),
     licenceNumber: String(input.licenceNumber).trim(),
-    licenceUntil: input.licenceUntil,
+    licenceUntil: parseCsDate(input.licenceUntil) || input.licenceUntil || "",
     pinHash,
   };
   const vehicle = {
