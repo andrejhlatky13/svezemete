@@ -24,12 +24,19 @@
     .tnote { font-size: 18px; color: #383c52; font-style: italic; border-top: 1px dashed #c9cce0; padding-top: 8px; }
     .old { padding: 12px 14px; border-radius: 12px; background: #fff3cd; border: 2px solid #fbbf24; font-weight: 700; }
     .privacy { margin-top: 30px; border-top: 2px solid #c9cce0; padding-top: 8px; }
-    @media print { body { background: #fff; font-size: 12pt; } .wrap { max-width: none; padding: 0; } .tools { display: none; }
+    .backapp { margin: 0 0 16px; }
+    .backapp a {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 60px; padding: 0 22px;
+      border-radius: 16px; font: 800 20px system-ui, sans-serif; color: #fff; text-decoration: none;
+      background: linear-gradient(90deg, #0891b2 0%, #4f46e5 55%, #7c3aed 100%);
+    }
+    @media print { body { background: #fff; font-size: 12pt; } .wrap { max-width: none; padding: 0; } .tools, .backapp { display: none; }
       .tpart { background: none; border-left: 4px solid #000; } }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <p class="backapp"><a href="./">Zpět do aplikace</a></p>
     <div class="brand"><div class="mark" aria-hidden="true">S</div>SvezemeTě</div>
     <div class="rule" aria-hidden="true"></div>
     <h1 id="title">Obchodní podmínky SvezemeTě</h1>

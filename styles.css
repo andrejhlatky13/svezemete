@@ -1,4 +1,4 @@
-/* SvezemeTě – tmavý vzhled (výchozí) podle návrhu, světlá varianta přes tlačítko Den.
+/* SvezemeTě – tmavý vzhled (výchozí) podle návrhu, světlá varianta přes tlačítko režimu.
    Velké písmo a vysoký kontrast: řidič aplikaci používá v autě. */
 :root {
   --bg: #07070c;
@@ -67,7 +67,7 @@ button, input, select, textarea { font: inherit; color: inherit; touch-action: m
 
 /* Hlavička: logo S v přechodu, název, tenká přechodová linka */
 header {
-  display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   padding: 14px 12px 10px 16px; background: var(--frame);
 }
 .brand { display: flex; gap: 10px; align-items: center; flex: 1 1 auto; min-width: 0; }
@@ -79,8 +79,13 @@ header {
 .tools { display: flex; gap: 6px; justify-content: flex-end; flex: none; }
 .tool {
   background: var(--panel); color: var(--ink); border: 2px solid var(--line);
-  border-radius: 14px; min-height: 56px; min-width: 56px; padding: 6px 9px; font-weight: 800; font-size: 16px; cursor: pointer;
+  border-radius: 14px; min-height: 48px; min-width: 44px; padding: 6px 10px; font-weight: 800; font-size: 16px; cursor: pointer;
 }
+.tool.theme-toggle {
+  display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; min-width: 44px; padding: 8px 12px; font-size: 17px; line-height: 1.15; white-space: nowrap;
+}
+.theme-icon { width: 22px; height: 22px; flex: none; display: block; }
 @media (max-width: 360px) { .nm { font-size: 22px; } .mark { width: 42px; height: 42px; font-size: 24px; } }
 .rule { height: 3px; margin: 0 18px; border-radius: 3px; background: var(--grad-soft); }
 main { padding: 14px 18px 48px; }
@@ -161,6 +166,14 @@ input, select, textarea {
 }
 input::placeholder { color: var(--muted); opacity: 0.75; }
 input:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.35); }
+input.invalid, select.invalid, label.has-error input, .consent.has-error {
+  border-color: var(--badline);
+}
+input.invalid:focus, label.has-error input:focus {
+  border-color: var(--badline); box-shadow: 0 0 0 3px rgba(255, 107, 122, 0.35);
+}
+.field-error { display: block; margin: 6px 0 0; color: var(--bad); font-size: 18px; font-weight: 700; }
+.forgot-link { display: inline-flex; width: auto; margin: 8px 0 0; padding: 10px 4px; font-size: 20px; }
 input.light-in { background: #fff; color: #0b0b14; border-color: #fff; }
 .price-in { font-size: 40px; font-weight: 900; text-align: center; color: var(--blue); }
 .price { font-size: 68px; font-weight: 900; text-align: center; letter-spacing: -1px; margin: 4px 0; font-variant-numeric: tabular-nums;
