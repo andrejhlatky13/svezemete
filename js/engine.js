@@ -37,6 +37,19 @@ export function validEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
 
+export function validZip(zip) {
+  const s = String(zip || "").trim();
+  return /^\d{5}$/.test(s) || /^\d{3}\s\d{2}$/.test(s);
+}
+
+export function validPhone(phone) {
+  const digits = String(phone || "").trim().replace(/[\s()./-]/g, "");
+  if (!digits) return false;
+  if (/^\+?(420|421)\d{9}$/.test(digits)) return true;
+  if (/^00(420|421)\d{9}$/.test(digits)) return true;
+  return /^\d{9}$/.test(digits);
+}
+
 export function validIban(iban) {
   const s = String(iban || "").replace(/\s/g, "").toUpperCase();
   return /^CZ\d{22}$/.test(s);
@@ -172,37 +185,57 @@ function sidloOf(input) {
   return [street, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 }
 
-export function registrationErrors(input, step) {
-  const e = [];
+export function registrationFieldErrors(input, step) {
+  const e = {};
+  const add = (field, message) => { if (!e[field]) e[field] = message; };
   const need = (n) => step == null || step === n;
   if (need(1)) {
-    if (!String(input.name || "").trim()) e.push("Vyplňte jméno nebo název firmy.");
-    if (!validIco(input.ico)) e.push("IČO musí mít 8 číslic a platnou kontrolní číslici.");
-    if (input.vatPayer && !String(input.dic || "").trim()) e.push("U plátce DPH vyplňte DIČ.");
-    if (!String(input.street || "").trim() || !String(input.city || "").trim() || !String(input.zip || "").trim()) e.push("Vyplňte sídlo: ulici, PSČ i město.");
-    if (!validIban(input.iban)) e.push("Bankovní účet zadejte jako české IBAN (CZ a 22 číslic).");
-    if (!validEmail(input.email)) e.push("Vyplňte platný e-mail dopravce.");
-    if (String(input.phone || "").replace(/\D/g, "").length < 9) e.push("Vyplňte telefon.");
+    if (!String(input.name || "").trim()) add("name", "Vyplňte jméno nebo název firmy.");
+    if (!String(input.ico || "").trim()) add("ico", "Vyplňte IČO.");
+    else if (!validIco(input.ico)) add("ico", "IČO musí mít 8 číslic a platnou kontrolní číslici.");
+    if (input.vatPayer && !String(input.dic || "").trim()) add("dic", "U plátce DPH vyplňte DIČ.");
+    if (!String(input.street || "").trim()) add("street", "Vyplňte ulici a číslo.");
+    if (!String(input.zip || "").trim()) add("zip", "Vyplňte PSČ.");
+    else if (!validZip(input.zip)) add("zip", "PSČ musí mít 5 číslic.");
+    if (!String(input.city || "").trim()) add("city", "Vyplňte město.");
+    if (!String(input.iban || "").trim()) add("iban", "Vyplňte bankovní účet.");
+    else if (!validIban(input.iban)) add("iban", "Bankovní účet zadejte jako české IBAN (CZ a 22 číslic).");
+    if (!String(input.email || "").trim()) add("email", "Vyplňte e-mail dopravce.");
+    else if (!validEmail(input.email)) add("email", "Zadejte platný e-mail.");
+    if (!String(input.phone || "").trim()) add("phone", "Vyplňte telefon.");
+    else if (!validPhone(input.phone)) add("phone", "Zadejte platné telefonní číslo.");
   }
   if (need(2)) {
-    if (!validEmail(input.loginEmail || input.email)) e.push("Vyplňte přihlašovací e-mail.");
-    if (String(input.password || "").length < 8) e.push("Heslo musí mít alespoň 8 znaků.");
-    if (input.password !== input.password2) e.push("Hesla se neshodují.");
-    if (!/^\d{4}$/.test(String(input.pin || ""))) e.push("PIN pro návrat z režimu zákazníka jsou 4 číslice.");
-    if (input.pin !== input.pin2) e.push("PIN se neshoduje.");
+    const login = String(input.loginEmail || input.email || "").trim();
+    if (!login) add("loginEmail", "Vyplňte přihlašovací e-mail.");
+    else if (!validEmail(login)) add("loginEmail", "Zadejte platný e-mail.");
+    if (!String(input.password || "")) add("password", "Vyplňte heslo.");
+    else if (String(input.password || "").length < 8) add("password", "Heslo musí mít alespoň 8 znaků.");
+    if (!String(input.password2 || "")) add("password2", "Zadejte heslo znovu.");
+    else if (input.password !== input.password2) add("password2", "Hesla se neshodují.");
+    if (!String(input.pin || "")) add("pin", "Vyplňte PIN.");
+    else if (!/^\d{4}$/.test(String(input.pin || ""))) add("pin", "PIN pro návrat z režimu zákazníka jsou 4 číslice.");
+    if (!String(input.pin2 || "")) add("pin2", "Zadejte PIN znovu.");
+    else if (input.pin !== input.pin2) add("pin2", "PIN se neshoduje.");
   }
   if (need(3)) {
-    if (!String(input.firstName || "").trim() || !String(input.lastName || "").trim()) e.push("Vyplňte jméno a příjmení řidiče.");
-    if (!String(input.licenceNumber || "").trim()) e.push("Vyplňte číslo oprávnění řidiče taxislužby.");
-    if (!input.licenceUntil) e.push("Vyplňte platnost oprávnění řidiče taxislužby.");
-    if (String(input.rz || "").replace(/\s/g, "").length < 5) e.push("Vyplňte registrační značku vozidla.");
-    if (!String(input.make || "").trim() || !String(input.model || "").trim()) e.push("Vyplňte tovární značku a obchodní označení vozidla.");
-    if (input.noTaximeter === false) e.push("Tato verze je jen pro jízdu bez taxametru podle § 21 odst. 6. Vozidlo nesmí mít střešní svítilnu ani nápis TAXI.");
+    if (!String(input.firstName || "").trim()) add("firstName", "Vyplňte jméno řidiče.");
+    if (!String(input.lastName || "").trim()) add("lastName", "Vyplňte příjmení řidiče.");
+    if (String(input.rz || "").replace(/\s/g, "").length < 5) add("rz", "Vyplňte registrační značku vozidla.");
+    if (!String(input.make || "").trim()) add("make", "Vyplňte tovární značku vozidla.");
+    if (!String(input.model || "").trim()) add("model", "Vyplňte obchodní označení vozidla.");
+    if (!String(input.licenceNumber || "").trim()) add("licenceNumber", "Vyplňte číslo oprávnění řidiče taxislužby.");
+    if (!input.licenceUntil) add("licenceUntil", "Vyplňte platnost oprávnění řidiče taxislužby.");
+    if (input.noTaximeter === false) add("noTaximeter", "Tato verze je jen pro jízdu bez taxametru podle § 21 odst. 6. Vozidlo nesmí mít střešní svítilnu ani nápis TAXI.");
   }
   if (need(4)) {
-    if (input.acceptPlatform !== true) e.push("Pro odeslání registrace je potřeba souhlas s použitím aplikace.");
+    if (input.acceptPlatform !== true) add("acceptPlatform", "Pro odeslání registrace je potřeba souhlas s použitím aplikace.");
   }
   return e;
+}
+
+export function registrationErrors(input, step) {
+  return Object.values(registrationFieldErrors(input, step));
 }
 
 export async function registerDriver(db, input, { activate = true } = {}) {

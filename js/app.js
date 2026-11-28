@@ -1,7 +1,7 @@
 import { TERMS_PARAS, PRIVACY_PARAS, TERMS_VERSION, TERMS_VERSIONS, TERMS_PAGE, termsLabel, termsHtml } from "./terms.js";
 import {
   PAYMENT_METHODS, RIDE_LABEL, STATUS_CARRIER, paymentLabel, formatKc, formatWhen, pragueParts,
-  validEmail, validIco, registrationErrors, createEmptyDb, rehydrate, registerDriver, loginDemo,
+  validEmail, validIco, registrationFieldErrors, createEmptyDb, rehydrate, registerDriver, loginDemo,
   checkPin as checkPinDemo, createOffer, placeOrder, startRide, endRide, markPaid, recordEet,
   setEet, proposeChange, discardChange, cancelRide, confirmationView, emailStatusView,
   recordSimulatedEmail, toCsv, paymentSums, ridesFor, updateProfile, setCarrierStatus, flushEet, setPin,
@@ -20,12 +20,14 @@ const SAMPLE = {
 };
 
 const S = {
-  // Tmavý vzhled je výchozí; světlý se zapne tlačítkem Den.
+  // Tmavý vzhled je výchozí; světlý se zapne tlačítkem režimu.
   night: localStorage.getItem("svezemete.theme") !== "light",
   view: "boot",
   draft: {},
   error: "",
   info: "",
+  fieldErrors: {},
+  recovering: false,
   rideId: null,
   customerLock: false,
   pinTries: 0,
@@ -36,6 +38,104 @@ const S = {
   regStep: 1,
   termsBack: "order",
 };
+
+function appBaseUrl() {
+  return new URL("./", location.href).href.split("#")[0].split("?")[0];
+}
+
+function authErrorCs(error) {
+  const code = String(error?.code || error?.error_code || "").toLowerCase();
+  const status = error?.status;
+  const msg = String(error?.message || error || "");
+  const text = `${code} ${msg}`.toLowerCase();
+  if (code === "invalid_credentials" || /invalid login credentials|invalid (email|login) or password|invalid_credentials/.test(text)) {
+    return "Nesprávný e-mail nebo heslo.";
+  }
+  if (code === "email_not_confirmed" || /email not confirmed|email_not_confirmed/.test(text)) {
+    return "E-mail zatím nebyl potvrzen. Zkontrolujte schránku.";
+  }
+  if (code === "over_email_send_rate_limit" || status === 429 || /rate limit|too many requests|for security purposes|over_email_send_rate_limit|email rate limit/.test(text)) {
+    return "Příliš mnoho pokusů, zkuste to za chvíli.";
+  }
+  if (code === "user_already_exists" || /already registered|user already exists|already been registered/.test(text)) {
+    return "Účet s tímto e-mailem už existuje.";
+  }
+  if (code === "weak_password" || /password should be at least|password is known|weak_password/.test(text)) {
+    return "Heslo musí mít alespoň 8 znaků.";
+  }
+  if (/missing email or phone|unable to validate email|invalid (email )?format|valid email/.test(text)) {
+    return "Zadejte platný e-mail.";
+  }
+  if (/same as the old password|same password/.test(text)) {
+    return "Nové heslo musí být jiné než původní.";
+  }
+  if (/auth session missing|session expired|invalid (or expired )?token|otp_expired|recovery.*expired/.test(text)) {
+    return "Odkaz pro obnovu hesla už není platný. Požádejte o nový.";
+  }
+  if (/failed to fetch|networkerror|network request failed|load failed/.test(text)) {
+    return "Nepodařilo se spojit se serverem. Zkuste to znovu.";
+  }
+  if (/[áčďéěíňóřšťúůýž]/i.test(msg)) return msg;
+  return "Něco se nepovedlo. Zkuste to znovu.";
+}
+
+function asCzechError(err) {
+  const msg = String(err?.message || "");
+  if (!msg) return "Něco se nepovedlo. Zkuste to znovu.";
+  const mapped = authErrorCs(err);
+  if (mapped !== "Něco se nepovedlo. Zkuste to znovu.") return mapped;
+  if (/[áčďéěíňóřšťúůýž]/i.test(msg) || /IČO|PIN|PSČ/.test(msg)) return msg;
+  if (/(error|invalid|failed|cannot|undefined|permission denied|violates|duplicate|unexpected|column|relation|function)/i.test(msg)) {
+    return "Něco se nepovedlo. Zkuste to znovu.";
+  }
+  return msg;
+}
+
+function recoveryInUrl() {
+  try {
+    const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+    return new URLSearchParams(raw).get("type") === "recovery";
+  } catch {
+    return false;
+  }
+}
+
+function markRecovering() {
+  S.recovering = true;
+  try { sessionStorage.setItem("svezemete.recovery", "1"); } catch { /* ignore */ }
+}
+
+function clearRecovering() {
+  S.recovering = false;
+  try { sessionStorage.removeItem("svezemete.recovery"); } catch { /* ignore */ }
+}
+
+function focusField(name) {
+  const el = document.querySelector(`[data-field="${name}"]`);
+  if (!el) return;
+  const details = el.closest("details");
+  if (details) details.open = true;
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function showStepErrors(fields) {
+  S.fieldErrors = fields;
+  S.error = "";
+  render();
+  const first = Object.keys(fields)[0];
+  if (first) focusField(first);
+}
+
+function themeToggle() {
+  const toLight = S.night;
+  const label = toLight ? "Světlý režim" : "Tmavý režim";
+  const hint = toLight ? "Přepnout na světlý režim" : "Přepnout na tmavý režim";
+  const icon = toLight
+    ? '<svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><path fill="currentColor" d="M12 2h1v3h-2V2zm0 17h1v3h-2v-3zM2 11h3v2H2v-2zm17 0h3v2h-3v-2zM5.05 4.34l1.41-1.41 2.12 2.12-1.41 1.41L5.05 4.34zm10.37 10.37 1.41-1.41 2.12 2.12-1.41 1.41-2.12-2.12zM4.34 18.95l1.41 1.41 2.12-2.12-1.41-1.41-2.12 2.12zm10.37-10.37 1.41 1.41 2.12-2.12-1.41-1.41-2.12 2.12z"/></svg>'
+    : '<svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 3.05a8.5 8.5 0 1 0 5.45 13.4A7 7 0 0 1 13 5.2a8.4 8.4 0 0 0 2.5-2.15z"/></svg>';
+  return `<button type="button" class="tool theme-toggle" data-act="toggle-night" title="${hint}" aria-label="${hint}">${icon}<span>${label}</span></button>`;
+}
 
 function configured() {
   const c = window.SVEZEME_CONFIG || {};
@@ -78,8 +178,13 @@ async function refresh() {
 
 function viewNow() {
   if (!S.backend) return "unconfigured";
+  if (S.recovering || S.view === "new-password") return "new-password";
   const signedIn = !!S.bundle?.me;
-  if (!signedIn) return S.view === "register" ? "register" : "login";
+  if (!signedIn) {
+    if (S.view === "register") return "register";
+    if (S.view === "forgot") return "forgot";
+    return "login";
+  }
   if (S.customerLock && !["customer", "order", "terms", "pin"].includes(S.view)) return "pin";
   return S.view;
 }
@@ -97,7 +202,7 @@ function shell(mode, body, wide) {
     <header>
       <div class="brand"><div class="mark" aria-hidden="true">S</div><div class="nm">SvezemeTě</div></div>
       <div class="tools">
-        ${S.customerLock ? "" : `<button type="button" class="tool" data-act="toggle-night" title="Přepnout světlý a tmavý vzhled">${S.night ? "Den" : "Noc"}</button>`}
+        ${S.customerLock ? "" : themeToggle()}
         ${who && !S.customerLock ? `<button type="button" class="tool" data-act="logout">Odhlásit</button>` : ""}
       </div>
     </header>
@@ -235,17 +340,41 @@ function viewUnconfigured() {
   return `<main class="gate"><p>Aplikace zatím není nastavena</p></main>`;
 }
 
+function viewForgot() {
+  return shell("Obnova hesla", `
+    <h1>Zapomenuté heslo</h1>
+    <p class="hint">Zadejte e-mail k účtu. Pošleme vám odkaz k nastavení nového hesla.</p>
+    <form data-act="forgot-send" autocomplete="on" class="card c1 formcard" novalidate>
+      <label>E-mail<input type="email" data-field="loginEmail" autocomplete="username" value="${esc(S.draft.loginEmail || "")}"></label>
+      <button class="btn" type="submit">Odeslat odkaz</button>
+    </form>
+    <button type="button" class="btn ghost" data-act="go" data-view="login">Zpět na přihlášení</button>`);
+}
+
+function viewNewPassword() {
+  return shell("Nové heslo", `
+    <h1>Nastavit nové heslo</h1>
+    <p class="hint">Zvolte si nové heslo k účtu. Musí mít alespoň 8 znaků.</p>
+    <form data-act="set-new-password" autocomplete="on" class="card c1 formcard" novalidate>
+      <label>Nové heslo<input type="password" data-field="password" autocomplete="new-password"></label>
+      <label>Nové heslo znovu<input type="password" data-field="password2" autocomplete="new-password"></label>
+      <button class="btn" type="submit">Uložit heslo</button>
+    </form>
+    <button type="button" class="btn ghost" data-act="cancel-recovery">Zpět na přihlášení</button>`);
+}
+
 function viewLogin() {
   const demo = S.backend.mode === "demo";
   const roster = demo ? S.backend.roster() : [];
   return shell("Přihlášení", `
     <h1>Vítejte</h1>
     <p class="hint">Aplikace slouží k elektronickému objednávání přepravy v taxislužbě. Je určena dopravcům, kteří splňují podmínky pro provozování taxislužby bez taxametru.</p>
-    <form data-act="login" autocomplete="on" class="card c1 formcard">
+    <form data-act="login" autocomplete="on" class="card c1 formcard" novalidate>
       <span class="lbl">Už mám účet</span>
       <label>E-mail<input type="email" data-field="loginEmail" autocomplete="username" value="${esc(S.draft.loginEmail || "")}"></label>
       <label>Heslo<input type="password" data-field="password" autocomplete="current-password"></label>
       <button class="btn" type="submit">Přihlásit</button>
+      <button type="button" class="link forgot-link" data-act="go-forgot">Zapomenuté heslo?</button>
     </form>
     <button type="button" class="btn ghost" data-act="go-register">Registrovat se jako řidič</button>
     ${roster.length ? `<h2>Účty v tomto prohlížeči</h2>${roster.map((u) => `<button type="button" class="card-btn c2" data-act="pick-user" data-email="${esc(u.email)}"><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span></button>`).join("")}<p class="hint">Jen demo v tomto prohlížeči. Hesla se tu nezobrazují.</p>` : ""}
@@ -256,11 +385,14 @@ function viewLogin() {
 function field(label, name, opts = {}) {
   const val = S.draft[name] ?? "";
   const type = opts.type || "text";
+  const err = S.fieldErrors?.[name] || "";
+  const errHtml = err ? `<span class="field-error" id="err-${name}" role="alert">${esc(err)}</span>` : "";
+  const described = err ? ` aria-invalid="true" aria-describedby="err-${name}"` : "";
   if (type === "checkbox") {
     const on = opts.defaultOn ? S.draft[name] !== false : S.draft[name] === true;
-    return `<label class="consent"><input type="checkbox" data-field="${name}" ${on ? "checked" : ""}><span>${label}</span></label>`;
+    return `<label class="consent${err ? " has-error" : ""}"><input type="checkbox" data-field="${name}" ${on ? "checked" : ""}${described}><span>${label}</span>${errHtml}</label>`;
   }
-  return `<label>${label}<input type="${type}" data-field="${name}" value="${esc(val)}" ${opts.mode ? `inputmode="${opts.mode}"` : ""} ${opts.ac ? `autocomplete="${opts.ac}"` : ""} ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ""}></label>`;
+  return `<label class="${err ? "has-error" : ""}">${label}<input class="${err ? "invalid" : ""}" type="${type}" data-field="${name}" value="${esc(val)}" ${opts.mode ? `inputmode="${opts.mode}"` : ""} ${opts.ac ? `autocomplete="${opts.ac}"` : ""} ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ""}${described}>${errHtml}</label>`;
 }
 
 function doc(title, inner, open) {
@@ -727,6 +859,8 @@ function render() {
     boot: () => shell("Načítání", "<h1>Načítám…</h1>"),
     unconfigured: viewUnconfigured,
     login: viewLogin,
+    forgot: viewForgot,
+    "new-password": viewNewPassword,
     register: viewRegister,
     home: viewHome,
     offer: viewOffer,
@@ -791,10 +925,11 @@ async function run(act, el) {
     if (!["pin-key", "toggle-night"].includes(act)) pullDraft();
     S.error = "";
     if (act !== "ares") S.info = "";
+    if (!["reg-next", "reg-submit"].includes(act)) S.fieldErrors = {};
     await actions[act]?.(el);
   } catch (err) {
     console.error(err);
-    S.error = err?.message || "Něco se nepovedlo.";
+    S.error = asCzechError(err);
     render();
   } finally {
     S.busy = false;
@@ -816,7 +951,38 @@ const actions = {
     if (view === "profile") delete S.draft._profile;
     go(view);
   },
-  async "go-register"() { S.regStep = 1; S.draft = { noTaximeter: true }; go("register"); },
+  async "go-register"() { S.regStep = 1; S.draft = { noTaximeter: true }; S.fieldErrors = {}; go("register"); },
+  async "go-forgot"() { go("forgot", { keepDraft: true }); },
+  async "forgot-send"() {
+    const email = String(S.draft.loginEmail || "").trim();
+    if (!email) throw new Error("Vyplňte e-mail.");
+    if (!validEmail(email)) throw new Error("Zadejte platný e-mail.");
+    await S.backend.resetPassword(email);
+    S.info = "Pokud je účet založený, poslali jsme odkaz k nastavení nového hesla. Zkontrolujte schránku.";
+    go("login", { keepDraft: true });
+  },
+  async "set-new-password"() {
+    const password = String(S.draft.password || "");
+    const password2 = String(S.draft.password2 || "");
+    if (password.length < 8) throw new Error("Heslo musí mít alespoň 8 znaků.");
+    if (password !== password2) throw new Error("Hesla se neshodují.");
+    await S.backend.updatePassword(password);
+    clearRecovering();
+    if (location.hash) history.replaceState(null, "", appBaseUrl());
+    S.draft = {};
+    S.info = "Nové heslo je uložené. Můžete se přihlásit.";
+    await S.backend.logout();
+    S.bundle = null;
+    go("login");
+  },
+  async "cancel-recovery"() {
+    clearRecovering();
+    if (location.hash) history.replaceState(null, "", appBaseUrl());
+    await S.backend.logout();
+    S.bundle = null;
+    S.draft = {};
+    go("login");
+  },
   async "go-offer"() {
     if (S.backend.mode !== "demo" && S.bundle?.carrier?.status !== "active") {
       throw new Error("Účet čeká na ověření. Jízdu založíte až po schválení správcem.");
@@ -858,16 +1024,24 @@ const actions = {
     render();
   },
   async "reg-next"() {
-    const errs = registrationErrors(S.draft, S.regStep);
-    if (errs.length) throw new Error(errs[0]);
+    const fields = registrationFieldErrors(S.draft, S.regStep);
+    if (Object.keys(fields).length) { showStepErrors(fields); return; }
+    S.fieldErrors = {};
     if (S.regStep === 1 && !S.draft.loginEmail) S.draft.loginEmail = S.draft.email;
     S.regStep += 1;
     go("register", { keepDraft: true });
   },
-  async "reg-back"() { S.regStep = Math.max(1, S.regStep - 1); go("register", { keepDraft: true }); },
+  async "reg-back"() { S.fieldErrors = {}; S.regStep = Math.max(1, S.regStep - 1); go("register", { keepDraft: true }); },
   async "reg-submit"() {
-    const errs = [1, 2, 3, 4].flatMap((n) => registrationErrors(S.draft, n));
-    if (errs.length) throw new Error(errs[0]);
+    for (const n of [1, 2, 3, 4]) {
+      const fields = registrationFieldErrors(S.draft, n);
+      if (Object.keys(fields).length) {
+        S.regStep = n;
+        showStepErrors(fields);
+        return;
+      }
+    }
+    S.fieldErrors = {};
     S.bundle = await S.backend.register({ ...S.draft });
     S.draft = {};
     S.regStep = 1;
@@ -875,7 +1049,11 @@ const actions = {
     go("home");
   },
   async login() {
-    S.bundle = await S.backend.login(S.draft.loginEmail, S.draft.password);
+    const email = String(S.draft.loginEmail || "").trim();
+    const password = String(S.draft.password || "");
+    if (!email || !password) throw new Error("Vyplňte e-mail a heslo.");
+    if (!validEmail(email)) throw new Error("Zadejte platný e-mail.");
+    S.bundle = await S.backend.login(email, password);
     S.draft = {};
     go("home");
   },
@@ -883,6 +1061,7 @@ const actions = {
   async "demo-admin"() { S.bundle = await S.backend.loginAdmin(); go("home"); },
   async logout() {
     S.customerLock = false;
+    clearRecovering();
     await S.backend.logout();
     S.bundle = null;
     S.draft = {};
@@ -1174,6 +1353,8 @@ function demoBackend() {
     },
     async loginAdmin() { write({ role: "admin", userId: "demo-admin" }); return makeBundle(db, read(), "demo"); },
     async logout() { write(null); },
+    async resetPassword() { throw new Error("Obnova hesla je v ukázkovém režimu vypnutá."); },
+    async updatePassword() { throw new Error("Obnova hesla je v ukázkovém režimu vypnutá."); },
     async checkPin(pin) { return checkPinDemo(db, read().userId, pin); },
     async changePin(pin) { await setPin(db, actor(), pin); persist(); },
     async createOffer(input) { const r = await createOffer(db, actor(), input); persist(); return { rideId: r.ride.id }; },
@@ -1235,8 +1416,11 @@ function remoteBackend() {
   function friendly(error) {
     const msg = error?.message || "Operace se nepovedla.";
     if (error?.code === "23505") return "Dopravce s tímto IČO nebo e-mailem už existuje.";
-    if (/schema|relation|function/i.test(msg)) return "Databáze ještě nemá schéma SvezemeTě. Spusťte setup/schema.sql podle README. " + msg;
-    return msg;
+    if (/schema|relation|function/i.test(msg)) return "Databáze ještě nemá schéma SvezemeTě. Spusťte setup/schema.sql podle README.";
+    const mapped = authErrorCs(error);
+    if (mapped !== "Něco se nepovedlo. Zkuste to znovu.") return mapped;
+    if (/[áčďéěíňóřšťúůýž]/i.test(msg) || /IČO|PIN|PSČ/.test(msg)) return msg;
+    return "Něco se nepovedlo. Zkuste to znovu.";
   }
   async function pull() {
     const { data: auth } = await sb.auth.getUser();
@@ -1279,14 +1463,22 @@ function remoteBackend() {
       const sdk = await loadSdk();
       const c = window.SVEZEME_CONFIG;
       sb = sdk.createClient(c.supabaseUrl, c.supabaseAnonKey);
+      sb.auth.onAuthStateChange((event) => {
+        if (event !== "PASSWORD_RECOVERY") return;
+        markRecovering();
+        S.draft = {};
+        S.error = "";
+        if (S.view !== "new-password") go("new-password");
+      });
+      if (recoveryInUrl()) markRecovering();
       const { data } = await sb.auth.getSession();
-      if (data.session) await pull().catch((e) => { S.error = e.message; });
+      if (data.session && !S.recovering) await pull().catch((e) => { S.error = asCzechError(e); });
     },
     async load() { if (session) await pull(); return makeBundle(cache, session, "remote", terms); },
     async register(input) {
       const email = String(input.loginEmail || input.email).trim().toLowerCase();
-      const { data, error } = await sb.auth.signUp({ email, password: input.password, options: { data: { name: input.name }, emailRedirectTo: new URL('./', location.href).href.split('#')[0].split('?')[0] } });
-      if (error) throw new Error(friendly(error));
+      const { data, error } = await sb.auth.signUp({ email, password: input.password, options: { data: { name: input.name }, emailRedirectTo: appBaseUrl() } });
+      if (error) throw new Error(authErrorCs(error));
       if (!data.session) {
         const pending = { ...input };
         localStorage.setItem("svezemete.pending", JSON.stringify(pending));
@@ -1299,7 +1491,7 @@ function remoteBackend() {
     },
     async login(email, password) {
       const { error } = await sb.auth.signInWithPassword({ email: String(email).trim(), password });
-      if (error) throw new Error(/invalid/i.test(error.message) ? "Nesprávný e-mail nebo heslo." : friendly(error));
+      if (error) throw new Error(authErrorCs(error));
       await pull();
       const pending = JSON.parse(localStorage.getItem("svezemete.pending") || "null");
       if (pending && session && !session.carrierId && session.role === "driver") {
@@ -1310,6 +1502,14 @@ function remoteBackend() {
       return makeBundle(cache, session, "remote", terms);
     },
     async logout() { await sb.auth.signOut(); session = null; },
+    async resetPassword(email) {
+      const { error } = await sb.auth.resetPasswordForEmail(String(email).trim(), { redirectTo: appBaseUrl() });
+      if (error) throw new Error(authErrorCs(error));
+    },
+    async updatePassword(password) {
+      const { error } = await sb.auth.updateUser({ password });
+      if (error) throw new Error(authErrorCs(error));
+    },
     async checkPin(pin) { return rpc("check_pin", { p_pin: pin }); },
     async changePin(pin) { await rpc("set_pin", { p_pin: pin }); },
     async createOffer(input) { const d = await rpc("create_offer", { p_from: input.from, p_to: input.to, p_price: input.priceKc, p_method: input.paymentMethod }); return { rideId: d.rideId }; },
@@ -1383,21 +1583,21 @@ async function finishRemote(sb, input, userId) {
     email: input.email, phone: input.phone, concession_number: input.concessionNumber || "",
     concession_until: input.concessionUntil || null,
   }).select("id").single();
-  if (ins.error) throw new Error(ins.error.code === "23505" ? "Dopravce s tímto IČO už existuje." : ins.error.message);
+  if (ins.error) throw new Error(ins.error.code === "23505" ? "Dopravce s tímto IČO už existuje." : asCzechError(ins.error));
   const cid = ins.data.id;
   const d = await sb.from("drivers").insert({
     carrier_id: cid, user_id: userId, first_name: input.firstName.trim(), last_name: input.lastName.trim(),
     licence_number: input.licenceNumber.trim(), licence_until: input.licenceUntil || null,
   });
-  if (d.error) throw new Error(d.error.message);
+  if (d.error) throw new Error(asCzechError(d.error));
   const v = await sb.from("vehicles").insert({
     carrier_id: cid, rz: String(input.rz).toUpperCase().trim(), make: input.make.trim(), model: input.model.trim(),
     registry_note: input.registryNote || "", no_taximeter: true,
   });
-  if (v.error) throw new Error(v.error.message);
+  if (v.error) throw new Error(asCzechError(v.error));
   await sb.from("eet_settings").insert({ carrier_id: cid, enabled: false });
   const pin = await sb.rpc("set_pin", { p_pin: input.pin });
-  if (pin.error) throw new Error(pin.error.message);
+  if (pin.error) throw new Error(asCzechError(pin.error));
 }
 
 function bind() {
@@ -1464,12 +1664,17 @@ async function boot() {
     return;
   }
   S.backend = hasServer ? remoteBackend() : demoBackend();
-  try { if (S.backend.init) await S.backend.init(); } catch (err) { S.error = err.message; }
-  try { S.bundle = await S.backend.load(); } catch (err) { S.error = err.message; S.bundle = null; }
+  try { if (S.backend.init) await S.backend.init(); } catch (err) { S.error = asCzechError(err); }
+  try { S.bundle = await S.backend.load(); } catch (err) { S.error = asCzechError(err); S.bundle = null; }
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem("svezemete.ui") || "null"); } catch { /* ignore */ }
-  if (S.bundle?.me) {
-    S.view = saved?.view && !["login", "boot", "unconfigured"].includes(saved.view) ? saved.view : "home";
+  try { if (sessionStorage.getItem("svezemete.recovery") === "1") S.recovering = true; } catch { /* ignore */ }
+  if (S.recovering || recoveryInUrl()) {
+    markRecovering();
+    S.view = "new-password";
+    S.customerLock = false;
+  } else if (S.bundle?.me) {
+    S.view = saved?.view && !["login", "boot", "unconfigured", "forgot", "new-password", "register"].includes(saved.view) ? saved.view : "home";
     S.rideId = saved?.rideId || null;
     S.customerLock = !!saved?.customerLock;
     S.regStep = saved?.regStep || 1;
